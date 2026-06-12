@@ -34,6 +34,12 @@ export class UI {
     if (this._buyOpen) this._refreshBuyAfford();
   }
   setReloading(on) { $('reload-hint').classList.toggle('hidden', !on); }
+  setRes(r) {
+    if (!r) return;
+    $('res-wood').textContent = r.wood;
+    $('res-stone').textContent = r.stone;
+  }
+  showResHud(on) { $('res-hud').classList.toggle('hidden', !on); }
   setProtected(on) { $('protect-hint').classList.toggle('hidden', !on); }
   setCrosshairGap(spreadPx, hide) {
     const ch = $('crosshair');

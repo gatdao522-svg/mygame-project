@@ -93,6 +93,7 @@ const MODES = {
   comp: { label: 'Соревновательный', rounds: true, respawn: false, buyAnytime: false, zombie: false, freeMoney: false },
   dm: { label: 'Deathmatch', rounds: false, respawn: true, buyAnytime: true, zombie: false, freeMoney: true, matchMs: 10 * 60000, killLimit: 50, respawnMs: 3500 },
   zombie: { label: 'Зомби-режим', rounds: true, respawn: false, buyAnytime: false, zombie: true, freeMoney: false, zombieHp: 150, firstZombieHp: 200, zombieRespawnMs: 5000 },
+  rust: { label: 'Раст', rounds: false, respawn: true, buyAnytime: true, zombie: false, freeMoney: false, rust: true, matchMs: 30 * 60000, killLimit: 500, respawnMs: 5000, map: 'rust_island', maxPlayers: 30 },
 };
 let gameMode = 'comp';
 const MODE = () => MODES[gameMode];
@@ -116,7 +117,43 @@ function convertToZombie(p, firstWave) {
   io.to(p.id).emit('infected', {});
   io.emit('server-msg', { text: `🧟 ${p.name} заражён!` });
 }
-let colliders = buildColliders(MAPS[mapId]);
+let staticColliders = buildColliders(MAPS[mapId]);
+let colliders = staticColliders;
+
+// ---------- rust mode: harvestable resources + buildable blocks ----------
+const RUST = { treeHp: 60, rockHp: 100, hitDmg: 20, yieldPerHit: 10, moneyPerHit: 12, respawnMs: 45000, blockCostWood: 15, blockHp: 150, maxBlocksPerPlayer: 30, maxBlocks: 250, harvestRange: 3.6, placeRange: 5 };
+let resources = []; // {id, type, x, z, hp, alive, respawnAt}
+let blocks = [];    // {id, owner, x, z, horiz, hp}
+let nextBlockId = 1;
+const BLOCK_W = 2.6, BLOCK_H = 2.2, BLOCK_T = 0.3;
+
+function resourceBox(r) {
+  return r.type === 'tree'
+    ? [r.x - 0.45, 0, r.z - 0.45, r.x + 0.45, 5, r.z + 0.45]
+    : [r.x - 0.9, 0, r.z - 0.9, r.x + 0.9, 1.5, r.z + 0.9];
+}
+function blockBox(b) {
+  const w = b.horiz ? BLOCK_W : BLOCK_T, d = b.horiz ? BLOCK_T : BLOCK_W;
+  return [b.x - w / 2, 0, b.z - d / 2, b.x + w / 2, BLOCK_H, b.z + d / 2];
+}
+function rebuildColliders() {
+  colliders = staticColliders.concat(
+    resources.filter((r) => r.alive).map(resourceBox),
+    blocks.map(blockBox),
+  );
+}
+function initResources() {
+  resources = (MAPS[mapId].resources || []).map(([type, x, z], i) => ({
+    id: i, type, x, z, hp: type === 'tree' ? RUST.treeHp : RUST.rockHp, alive: true, respawnAt: 0,
+  }));
+  blocks = [];
+  rebuildColliders();
+}
+initResources();
+function rustState() {
+  return { deadResources: resources.filter((r) => !r.alive).map((r) => r.id), blocks: blocks.map(blockPub) };
+}
+function blockPub(b) { return { id: b.id, x: b.x, z: b.z, horiz: b.horiz }; }
 const players = new Map(); // socket.id -> player
 const ipConns = new Map(); // ip -> count
 
@@ -219,7 +256,8 @@ function startMatch() {
   round.roundNo = 0;
   round.score = { t: 0, ct: 0 };
   for (const p of players.values()) p.money = CFG.ECONOMY.start;
-  if (!MODE().rounds) { // deathmatch: one long live phase
+  if (MODE().rust) { initResources(); io.emit('rust-reset', rustState()); for (const p of players.values()) p.res = { wood: 0, stone: 0 }; }
+  if (!MODE().rounds) { // deathmatch / rust: one long live phase
     round.phase = 'live';
     round.roundNo = 1;
     round.winner = null;
@@ -345,6 +383,19 @@ setInterval(() => {
       if (!p.alive && t > p.respawnAt) { resetPlayerForRound(p, false); sendPrivate(p); io.emit('respawned', { id: p.id, pos: p.pos }); }
     }
   }
+  // rust: resources regrow
+  if (MODE().rust) {
+    let changed = false;
+    for (const r of resources) {
+      if (!r.alive && t > r.respawnAt) {
+        r.alive = true;
+        r.hp = r.type === 'tree' ? RUST.treeHp : RUST.rockHp;
+        io.emit('resource-update', { id: r.id, alive: true });
+        changed = true;
+      }
+    }
+    if (changed) rebuildColliders();
+  }
   // zombie mode: dead zombies rise again until the round ends
   if (MODE().zombie && round.phase === 'live') {
     for (const p of players.values()) {
@@ -383,7 +434,7 @@ function sendPrivate(p) {
   if (!sock) return;
   sock.emit('you', {
     money: p.money, loadout: p.loadout, ammo: p.ammo, weapon: p.weapon,
-    hp: p.hp, alive: p.alive, pos: p.pos, protectedUntil: p.protectedUntil,
+    hp: p.hp, alive: p.alive, pos: p.pos, protectedUntil: p.protectedUntil, res: p.res,
   });
 }
 
@@ -550,6 +601,7 @@ function changeMode(id) {
   gameMode = id;
   slog('admin', `mode -> ${id}`);
   io.emit('server-msg', { text: `Режим игры: ${MODE().label}` });
+  if (MODE().map && mapId !== MODE().map && MAPS[MODE().map]) { changeMap(MODE().map); return; }
   for (const p of players.values()) { // strip zombie state when leaving zombie mode
     if (p.origSkin) { p.skin = p.origSkin; p.origSkin = null; io.emit('player-update', pub(p)); }
   }
@@ -558,7 +610,8 @@ function changeMode(id) {
 
 function changeMap(id) {
   mapId = id;
-  colliders = buildColliders(MAPS[mapId]);
+  staticColliders = buildColliders(MAPS[mapId]);
+  initResources();
   slog('admin', `map -> ${id}`);
   io.emit('map-change', { map: id });
   // players will reconnect after reload
@@ -599,8 +652,9 @@ io.on('connection', (socket) => {
 
   socket.on('join', (data) => {
     if (joined || typeof data !== 'object' || !data) return;
-    if (players.size >= MAX_PLAYERS) {
-      socket.emit('join-fail', { reason: `Сервер полон (${MAX_PLAYERS} игроков)` });
+    const cap = MODE().maxPlayers || MAX_PLAYERS;
+    if (players.size >= cap) {
+      socket.emit('join-fail', { reason: `Сервер полон (${cap} игроков)` });
       socket.disconnect(true);
       return;
     }
@@ -625,6 +679,7 @@ io.on('connection', (socket) => {
       flags: {}, flagsTotal: 0,
       stateBudget: 40, stateBudgetAt: now(),
       lastChatAt: 0, lastStateT: now(),
+      res: { wood: 0, stone: 0 }, lastHarvestAt: 0, lastBlockHitAt: 0,
     };
     // joining mid-round: dm respawns instantly, zombie mode joins the horde
     if (round.phase === 'live' || round.phase === 'end') {
@@ -644,6 +699,7 @@ io.on('connection', (socket) => {
 
     socket.emit('init', {
       id: socket.id, map: mapId,
+      rust: MODE().rust ? rustState() : null,
       round: roundPayload(),
       players: [...players.values()].map(pub),
       you: { money: p.money, loadout: p.loadout, ammo: p.ammo, weapon: p.weapon, hp: p.hp, alive: p.alive, pos: p.pos, protectedUntil: p.protectedUntil, skin: p.skin },
@@ -816,6 +872,81 @@ io.on('connection', (socket) => {
         checkRoundWin();
         break; // one kill per shot is enough to stop processing further hits on same victim
       }
+    }
+  });
+
+  socket.on('harvest', (data) => {
+    const p = players.get(socket.id);
+    if (!p || !p.alive || !MODE().rust || typeof data !== 'object' || !data) return;
+    if (p.weapon !== 'knife') return;
+    const t = now();
+    if (t - p.lastHarvestAt < 200) return;
+    const r = resources[data.id | 0];
+    if (!r || !r.alive) return;
+    const dx = p.pos[0] - r.x, dz = p.pos[2] - r.z;
+    if (dx * dx + dz * dz > RUST.harvestRange * RUST.harvestRange) return;
+    p.lastHarvestAt = t;
+    r.hp -= RUST.hitDmg;
+    const kind = r.type === 'tree' ? 'wood' : 'stone';
+    p.res[kind] += RUST.yieldPerHit;
+    p.money = Math.min(CFG.ECONOMY.max, p.money + RUST.moneyPerHit);
+    if (r.hp <= 0) {
+      r.alive = false;
+      r.respawnAt = t + RUST.respawnMs;
+      rebuildColliders();
+      io.emit('resource-update', { id: r.id, alive: false });
+    }
+    sendPrivate(p);
+    io.to(p.id).emit('harvested', { id: r.id, kind, amount: RUST.yieldPerHit, left: Math.max(0, r.hp) });
+  });
+
+  socket.on('place-block', (data) => {
+    const p = players.get(socket.id);
+    if (!p || !p.alive || !MODE().rust || typeof data !== 'object' || !data) return;
+    if (p.res.wood < RUST.blockCostWood) { io.to(p.id).emit('server-msg', { text: `Нужно ${RUST.blockCostWood} дерева для блока` }); return; }
+    if (blocks.length >= RUST.maxBlocks || blocks.filter((b) => b.owner === p.id).length >= RUST.maxBlocksPerPlayer) return;
+    const x = +data.x, z = +data.z;
+    if (!isFinite(x) || !isFinite(z)) return;
+    const dx = p.pos[0] - x, dz = p.pos[2] - z;
+    if (dx * dx + dz * dz > RUST.placeRange * RUST.placeRange) return;
+    const bd = mapBounds();
+    if (Math.abs(x) > bd.x - 1 || Math.abs(z) > bd.z - 1) return;
+    const b = { id: nextBlockId++, owner: p.id, x: +x.toFixed(2), z: +z.toFixed(2), horiz: !!data.horiz, hp: RUST.blockHp };
+    const box = blockBox(b);
+    // don't allow placing inside existing geometry or players
+    for (const c of colliders) {
+      if (box[0] < c[3] && box[3] > c[0] && box[1] < c[4] && box[4] > c[1] && box[2] < c[5] && box[5] > c[2]) return;
+    }
+    for (const q of players.values()) {
+      if (!q.alive) continue;
+      const qr = 0.5;
+      if (box[0] < q.pos[0] + qr && box[3] > q.pos[0] - qr && box[2] < q.pos[2] + qr && box[5] > q.pos[2] - qr) return;
+    }
+    p.res.wood -= RUST.blockCostWood;
+    blocks.push(b);
+    rebuildColliders();
+    io.emit('block-add', blockPub(b));
+    sendPrivate(p);
+  });
+
+  socket.on('damage-block', (data) => {
+    const p = players.get(socket.id);
+    if (!p || !p.alive || !MODE().rust || typeof data !== 'object' || !data) return;
+    const w = CFG.WEAPONS[p.weapon];
+    if (!w) return;
+    const t = now();
+    if (t - p.lastBlockHitAt < (60000 / w.rpm) * 0.7) return;
+    const b = blocks.find((q) => q.id === (data.id | 0));
+    if (!b) return;
+    const dx = p.pos[0] - b.x, dz = p.pos[2] - b.z;
+    const range = Math.min((w.range || 50) + 2.5, 120); // + melee reach to block edge
+    if (dx * dx + dz * dz > range * range) return;
+    p.lastBlockHitAt = t;
+    b.hp -= w.dmg * (w.pellets || 1) * 0.6;
+    if (b.hp <= 0) {
+      blocks = blocks.filter((q) => q.id !== b.id);
+      rebuildColliders();
+      io.emit('block-remove', { id: b.id });
     }
   });
 

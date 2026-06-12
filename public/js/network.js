@@ -13,4 +13,7 @@ export class Network {
   sendBuy(weapon) { this.socket.emit('buy', { weapon }); }
   sendSkin(skin) { this.socket.emit('skin', { skin }); }
   sendChat(text) { this.socket.emit('chat', text); }
+  sendHarvest(id) { this.socket.emit('harvest', { id }); }
+  sendPlaceBlock(x, z, horiz) { this.socket.emit('place-block', { x, z, horiz }); }
+  sendDamageBlock(id) { this.socket.emit('damage-block', { id }); }
 }

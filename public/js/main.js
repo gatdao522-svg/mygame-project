@@ -26,7 +26,7 @@ renderer.autoClear = false;
 
 const scene = new THREE.Scene();
 const BASE_FOV = 75;
-const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth / innerHeight, 0.08, 500);
+const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth / innerHeight, 0.08, 800);
 
 const vmScene = new THREE.Scene();
 const vmCamera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.01, 10);
@@ -126,6 +126,11 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Tab') { e.preventDefault(); ui.showScoreboard(true); ui.updateScoreboard(lastSnapshotFull(), net.id); }
   if (e.code === 'KeyR' && weapons) weapons.startReload();
   if (e.code === 'KeyB' && player.joined) toggleBuyMenu();
+  if (e.code === 'KeyF' && player.joined && !player.dead && round.mode === 'rust') {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    const px = player.pos.x + fx * 2.4, pz = player.pos.z + fz * 2.4;
+    net.sendPlaceBlock(+px.toFixed(2), +pz.toFixed(2), Math.abs(fz) >= Math.abs(fx));
+  }
   if (e.code === 'Escape' && ui.isBuyOpen()) toggleBuyMenu(false);
   if (e.code === 'Enter' && player.joined) openChat();
   const slotKey = { Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 3 }[e.code];
@@ -296,6 +301,8 @@ $('play').addEventListener('click', () => {
       raycastTargets: () => [...(world ? world.raycastMeshes : []), ...remotes.hitboxes()],
       onShoot: (p) => net.sendShoot(p),
       onReload: () => net.sendReload(),
+      onHarvest: (id) => net.sendHarvest(id),
+      onBlockHit: (id) => net.sendDamageBlock(id),
       ui,
       team: () => player.team,
       skin: () => selectedSkin,
@@ -317,6 +324,7 @@ net.on('init', (d) => {
     world = buildMap(scene, MAPS[d.map] || MAPS.arena);
     ui.initMinimap(world.mapData);
   }
+  applyRustState(d.rust);
   player.joined = true;
   applyRound(d.round);
   for (const p of d.players) if (p.id !== d.id) remotes.addOrUpdateInfo(p);
@@ -340,7 +348,14 @@ function applyYou(you) {
   player.dead = !you.alive;
   player.protectedUntil = you.protectedUntil || 0;
   ui.setMoney(you.money);
+  ui.setRes(you.res);
   if (weapons) weapons.syncFromServer(you);
+}
+
+function applyRustState(st) {
+  if (!st || !world) return;
+  for (const id of st.deadResources) world.setResourceAlive(id, false);
+  for (const b of st.blocks) world.addBlock(b);
 }
 net.on('you', applyYou);
 
@@ -350,6 +365,7 @@ function applyRound(r) {
   Object.assign(round, r);
   ui.setRoundScore(r.score.t, r.score.ct, r.roundNo, r.phase, r.mode);
   if (r.mode !== prevMode) ui.setTeamLabels(r.mode);
+  ui.showResHud(r.mode === 'rust');
   timeWarned = false;
   if (r.phase === prevPhase) return;
   const zm = r.mode === 'zombie';
@@ -363,6 +379,7 @@ function applyRound(r) {
     weapons && (weapons.locked = false);
     if (ui.isBuyOpen()) toggleBuyMenu(false);
     if (r.mode === 'dm') ui.banner('DEATHMATCH', `До ${50} убийств. Возрождение автоматическое`, 2500);
+    else if (r.mode === 'rust') ui.banner('РАСТ', 'Добывай деревья и камни ножом, строй стены (F)', 3500);
     else ui.banner(zm ? 'ЗАРАЖЕНИЕ!' : 'В БОЙ!', zm ? 'Продержись до конца раунда' : '', 1800);
     audio.playRoundStart();
   } else if (r.phase === 'end') {
@@ -454,6 +471,17 @@ net.on('correct', (d) => {
 net.on('chat', (c) => ui.addChat(c.name, c.team, c.text));
 net.on('server-msg', (m) => ui.addChat(null, null, m.text));
 net.on('reloading', () => {});
+net.on('resource-update', (d) => { if (world) world.setResourceAlive(d.id, d.alive); });
+net.on('block-add', (b) => { if (world) world.addBlock(b); });
+net.on('block-remove', (d) => { if (world) world.removeBlock(d.id); });
+net.on('rust-reset', (st) => {
+  if (!world) return;
+  (world.mapData.resources || []).forEach((_, id) => world.setResourceAlive(id, true));
+  applyRustState(st);
+});
+net.on('harvested', (d) => {
+  ui.centerMsg(`+${d.amount} ${d.kind === 'wood' ? '🪵 дерево' : '🪨 камень'}`);
+});
 net.on('map-change', () => { ui.banner('СМЕНА КАРТЫ', 'Перезагрузка…', 0); setTimeout(() => location.reload(), 1200); });
 net.on('join-fail', (d) => {
   $('hud').classList.add('hidden');
@@ -706,7 +734,6 @@ function tick() {
 
   adaptResolution(dt);
 }
-tick();
 
 // ---------- adaptive resolution: keep frame rate up on weak GPUs ----------
 const PR_MAX = Math.min(devicePixelRatio, IS_TOUCH ? 1.25 : 1.75);
@@ -737,3 +764,8 @@ window.__dbg = () => ({
 window.__look = (yaw, pitch = 0) => { player.yaw = yaw; player.pitch = pitch; };
 window.__w = () => weapons;
 window.__net = () => net;
+window.__scene = () => scene;
+window.__camera = () => camera;
+window.__three = THREE;
+
+tick();
