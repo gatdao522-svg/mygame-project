@@ -80,16 +80,16 @@ function prepChar(gltf, teamColor) {
 }
 
 export async function loadAssets(onProgress) {
+  const gunFiles = {
+    ak: 'AK-47', pistol: 'USP', sniper: 'AWP',
+    m4: 'M4A4', mp5: 'MP5', shotgun: 'Nova', deagle: 'Deagle',
+  };
   const steps = [];
-  steps.push(['Модели оружия: AK', async () => {
-    assets.guns.ak = prepGun(await load('assets/ak.glb'));
-  }]);
-  steps.push(['Модели оружия: пистолет', async () => {
-    assets.guns.pistol = prepGun(await load('assets/pistol.glb'));
-  }]);
-  steps.push(['Модели оружия: AWP', async () => {
-    assets.guns.sniper = prepGun(await load('assets/sniper.glb'));
-  }]);
+  for (const [key, label] of Object.entries(gunFiles)) {
+    steps.push([`Оружие: ${label}`, async () => {
+      assets.guns[key] = prepGun(await load(`assets/${key}.glb`));
+    }]);
+  }
   steps.push(['Нож', async () => {
     try { assets.guns.knife = prepGun(await load('assets/knife.glb')); }
     catch { assets.guns.knife = makeKnife(); }

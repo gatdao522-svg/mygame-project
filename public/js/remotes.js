@@ -3,8 +3,10 @@ import * as THREE from 'three';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 import { assets } from './assets.js';
 import { TEAM_INFO, INTERP_DELAY_MS, WEAPONS } from './config.js';
+import { applySkin } from './weapons.js';
 
-const tmpV = new THREE.Vector3();
+// per-model yaw so the muzzle points forward (models have different native axes)
+const TP_YAW = { ak: -Math.PI / 2, pistol: Math.PI / 2, sniper: 0, knife: 0, m4: Math.PI / 2, mp5: Math.PI / 2, shotgun: Math.PI / 2, deagle: Math.PI / 2 };
 
 function makeNameSprite(name, team) {
   const c = document.createElement('canvas');
@@ -29,6 +31,7 @@ class Avatar {
     this.id = info.id;
     this.team = info.team;
     this.name = info.name;
+    this.skin = info.skin || 'default';
     this.group = new THREE.Group();
     this.alive = info.alive !== false;
     this.deathT = 0;
@@ -40,7 +43,6 @@ class Avatar {
 
     if (charData) {
       this.model = skeletonClone(charData.scene);
-      // Quaternius chars are ~2 units tall; scale to 1.8m
       const box = new THREE.Box3().setFromObject(this.model);
       const h = box.max.y - box.min.y || 1.8;
       const s = 1.8 / h;
@@ -53,7 +55,6 @@ class Avatar {
       }
       this._attachGun();
     } else {
-      // fallback capsule
       const mat = new THREE.MeshLambertMaterial({ color: TEAM_INFO[info.team]?.color || 0x888888 });
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.1, 4, 8), mat);
       body.position.y = 0.9; body.castShadow = true;
@@ -73,11 +74,26 @@ class Avatar {
     this.nameTag.position.y = 2.1;
     this.group.add(this.nameTag);
 
+    // spawn protection bubble
+    this.protMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1.05, 16, 10),
+      new THREE.MeshBasicMaterial({
+        color: info.team === 't' ? 0xe8a33d : 0x5ba2e8,
+        transparent: true, opacity: 0.16, depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    this.protMesh.position.y = 1.0;
+    this.protMesh.scale.y = 1.25;
+    this.protMesh.visible = false;
+    this.group.add(this.protMesh);
+
     if (Array.isArray(info.pos)) this.group.position.set(...info.pos);
-    this.snaps = []; // interpolation buffer [{t, pos, yaw, pitch}]
+    this.snaps = [];
     this.anim = 'idle';
     this.crouch = false;
-    this.weapon = info.weapon || 'ak47';
+    this.prot = !!info.prot;
+    this.weapon = info.weapon || 'pistol';
     scene.add(this.group);
     this._play('Idle');
   }
@@ -96,20 +112,19 @@ class Avatar {
       this.gunHolder.position.set(0.25, 1.25, 0.25);
       this.group.add(this.gunHolder);
     }
-    this._setGunModel(this.weapon || 'ak47');
+    this._setGunModel(this.weapon || 'pistol');
   }
 
   _setGunModel(weaponId) {
     if (!this.gunHolder) return;
     if (this.gunMesh) this.gunHolder.remove(this.gunMesh);
-    const key = (WEAPONS[weaponId] || WEAPONS.ak47).model;
+    const key = (WEAPONS[weaponId] || WEAPONS.pistol).model;
     const tpl = assets.guns[key];
     if (!tpl) return;
     this.gunMesh = tpl.clone();
     this.gunMesh.scale.setScalar(0.55);
-    // per-model yaw so the muzzle points forward (models have different native axes)
-    const tpYaw = { ak: -Math.PI / 2, pistol: Math.PI / 2, sniper: 0, knife: 0 }[key] ?? 0;
-    this.gunMesh.rotation.y = tpYaw;
+    this.gunMesh.rotation.y = TP_YAW[key] ?? 0;
+    applySkin(this.gunMesh, this.skin);
     this.gunHolder.add(this.gunMesh);
   }
 
@@ -134,7 +149,9 @@ class Avatar {
     this.snaps.push({ t: now, pos: s.pos.slice(), yaw: s.yaw, pitch: s.pitch });
     if (this.snaps.length > 30) this.snaps.shift();
     if (s.weapon && s.weapon !== this.weapon) { this.weapon = s.weapon; this._setGunModel(s.weapon); }
+    if (s.skin && s.skin !== this.skin) { this.skin = s.skin; this._setGunModel(this.weapon); }
     this.anim = s.anim; this.crouch = s.crouch;
+    this.prot = !!s.prot;
     if (s.alive === false && this.alive) this.die();
     if (s.alive !== false && !this.alive) this.respawn(s.pos);
   }
@@ -144,6 +161,7 @@ class Avatar {
     this._play('Death', 0.1, true);
     this.headHB.userData.playerId = null;
     this.bodyHB.userData.playerId = null;
+    this.protMesh.visible = false;
   }
 
   respawn(pos) {
@@ -159,7 +177,6 @@ class Avatar {
     if (this.mixer) this.mixer.update(dt);
     if (!this.alive) return;
 
-    // interpolate position at now - delay
     const renderT = now - INTERP_DELAY_MS;
     const sn = this.snaps;
     if (sn.length >= 2) {
@@ -182,6 +199,8 @@ class Avatar {
     }
 
     this._poseHitboxes(this.crouch);
+    this.protMesh.visible = this.prot;
+    if (this.prot) this.protMesh.rotation.y += dt * 1.5;
     const animMap = { idle: 'Idle', walk: 'Walk', run: 'Run_Gun', air: 'Jump_Idle', crouch: 'Duck', shoot: 'Idle_Shoot' };
     let target = animMap[this.anim] || 'Idle';
     if (!this.actions[target]) target = this.actions['Run'] && this.anim === 'run' ? 'Run' : 'Idle';
@@ -213,6 +232,7 @@ export class RemotePlayers {
       if (s.id === myId) continue;
       const a = this.map.get(s.id);
       if (a) a.pushSnap(s, now);
+      else this.addOrUpdateInfo(s);
     }
   }
   hitboxes() {

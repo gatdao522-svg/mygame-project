@@ -29,10 +29,14 @@ export function playGunshot(weapon, vol = 1) {
   if (!ctx) return;
   const t = ctx.currentTime;
   const p = {
-    ak47:   { dur: 0.22, freq: 900, boom: 110, peak: 0.9 },
-    pistol: { dur: 0.14, freq: 1400, boom: 160, peak: 0.7 },
-    awp:    { dur: 0.5, freq: 500, boom: 65, peak: 1.2 },
-    knife:  { dur: 0.06, freq: 2500, boom: 0, peak: 0.18 },
+    ak47:    { dur: 0.22, freq: 900, boom: 110, peak: 0.9 },
+    m4:      { dur: 0.2, freq: 1100, boom: 130, peak: 0.85 },
+    mp5:     { dur: 0.15, freq: 1300, boom: 150, peak: 0.65 },
+    shotgun: { dur: 0.38, freq: 600, boom: 70, peak: 1.1 },
+    deagle:  { dur: 0.3, freq: 700, boom: 90, peak: 1.0 },
+    pistol:  { dur: 0.14, freq: 1400, boom: 160, peak: 0.7 },
+    awp:     { dur: 0.5, freq: 500, boom: 65, peak: 1.2 },
+    knife:   { dur: 0.06, freq: 2500, boom: 0, peak: 0.18 },
   }[weapon] || { dur: 0.2, freq: 1000, boom: 120, peak: 0.8 };
 
   // crack (filtered noise)
@@ -59,10 +63,16 @@ function click(t, freq, vol, dur = 0.03) {
   o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.02);
 }
 
+function tone(t, freq, vol, dur, type = 'sine') {
+  const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq;
+  const g = ctx.createGain(); env(g, t, vol, dur);
+  o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05);
+}
+
 export function playReload(weapon) {
   if (!ctx) return;
   const t = ctx.currentTime;
-  const total = { ak47: 2.4, pistol: 1.8, awp: 3.2 }[weapon] || 2;
+  const total = { ak47: 2.4, m4: 2.3, mp5: 2.1, shotgun: 2.8, deagle: 2.2, pistol: 1.8, awp: 3.2 }[weapon] || 2;
   click(t + 0.15, 700, 0.25, 0.04);          // mag out
   click(t + 0.25, 350, 0.2, 0.05);
   click(t + total * 0.55, 900, 0.3, 0.04);   // mag in
@@ -72,6 +82,10 @@ export function playReload(weapon) {
 }
 
 export function playDryFire() { if (ctx) click(ctx.currentTime, 1100, 0.2, 0.025); }
+export function playSwitch() { if (ctx) { click(ctx.currentTime, 600, 0.18, 0.03); click(ctx.currentTime + 0.06, 900, 0.15, 0.03); } }
+export function playBuy() { if (ctx) { click(ctx.currentTime, 1500, 0.25, 0.03); tone(ctx.currentTime + 0.05, 880, 0.2, 0.1); } }
+export function playBuyFail() { if (ctx) tone(ctx.currentTime, 220, 0.25, 0.18, 'sawtooth'); }
+
 export function playHitmarker(headshot) {
   if (!ctx) return;
   const t = ctx.currentTime;
@@ -101,4 +115,31 @@ export function playKillDing() {
     const g = ctx.createGain(); env(g, t + i * 0.07, 0.25, 0.12);
     o.connect(g).connect(master); o.start(t + i * 0.07); o.stop(t + i * 0.07 + 0.15);
   });
+}
+
+// ===== CS-style round stingers =====
+export function playFreezeBeep() {
+  if (!ctx) return;
+  tone(ctx.currentTime, 660, 0.22, 0.12, 'square');
+}
+export function playRoundStart() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  [523, 659, 784].forEach((fr, i) => tone(t + i * 0.09, fr, 0.25, 0.16, 'triangle'));
+}
+export function playRoundWin() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  [523, 659, 784, 1046].forEach((fr, i) => tone(t + i * 0.12, fr, 0.3, 0.28, 'triangle'));
+}
+export function playRoundLose() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  [392, 330, 262].forEach((fr, i) => tone(t + i * 0.16, fr, 0.28, 0.3, 'sawtooth'));
+}
+export function playTimeWarning() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  tone(t, 880, 0.2, 0.1, 'square');
+  tone(t + 0.15, 880, 0.2, 0.1, 'square');
 }

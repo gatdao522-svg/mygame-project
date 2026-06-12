@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>STRIKE ARENA — 3D FPS</title>
 <link rel="stylesheet" href="css/style.css">
 <script src="/socket.io/socket.io.js"></script>
@@ -29,6 +29,10 @@
       <button class="team-btn selected" data-team="auto"><span class="team-icon auto-icon"></span>Авто<small>баланс</small></button>
       <button class="team-btn" data-team="t"><span class="team-icon t-icon"></span>Боевики<small>T</small></button>
     </div>
+    <div class="skin-row">
+      <label>Скин оружия</label>
+      <div id="skin-select"></div>
+    </div>
     <div class="sens-row">
       <label>Чувствительность мыши <span id="sensVal">1.0</span></label>
       <input id="sens" type="range" min="0.2" max="3" step="0.1" value="1">
@@ -37,8 +41,8 @@
     <div id="loadStatus" class="load-status">Загрузка ресурсов…</div>
     <div class="controls-hint">
       <b>WASD</b> движение • <b>Shift</b> тихий шаг • <b>Ctrl</b> присед • <b>Space</b> прыжок<br>
-      <b>ЛКМ</b> огонь • <b>ПКМ</b> прицел (AWP) • <b>R</b> перезарядка • <b>1/2/3/4</b> оружие<br>
-      <b>Tab</b> счёт • <b>Enter</b> чат
+      <b>ЛКМ</b> огонь • <b>ПКМ</b> прицел (AWP) • <b>R</b> перезарядка • <b>1/2/3</b> оружие<br>
+      <b>B</b> магазин • <b>Tab</b> счёт • <b>Enter</b> чат
     </div>
   </div>
 </div>
@@ -58,19 +62,47 @@
   <div id="hud-bl">
     <div class="hp-row"><span class="hp-ico">+</span><span id="hp">100</span></div>
     <div class="hp-bar"><div id="hp-fill"></div></div>
+    <div id="money">$800</div>
   </div>
   <div id="hud-br">
-    <div id="weapon-name">AK-47</div>
-    <div class="ammo-row"><span id="ammo">30</span><span class="ammo-sep">/</span><span id="reserve">90</span></div>
+    <div id="weapon-name">USP-9</div>
+    <div class="ammo-row"><span id="ammo">12</span><span class="ammo-sep">/</span><span id="reserve">48</span></div>
     <div id="reload-hint" class="hidden">ПЕРЕЗАРЯДКА…</div>
   </div>
+  <div id="protect-hint" class="hidden">🛡 ЗАЩИТА СПАВНА</div>
   <div id="killfeed"></div>
   <div id="minimap-wrap"><canvas id="minimap" width="180" height="150"></canvas></div>
-  <div id="score-top"><span class="sc-ct" id="score-ct">0</span><span class="sc-mid">:</span><span class="sc-t" id="score-t">0</span></div>
+  <div id="score-top">
+    <span class="sc-ct" id="score-ct">0</span>
+    <span class="sc-mid"><span id="round-timer">—:—</span><span id="round-label"></span></span>
+    <span class="sc-t" id="score-t">0</span>
+  </div>
+  <div id="banner" class="hidden"><div id="banner-title"></div><div id="banner-sub"></div></div>
   <div id="center-msg" class="hidden"></div>
   <div id="chat-log"></div>
   <div id="chat-input-wrap" class="hidden"><input id="chat-input" maxlength="120" placeholder="Сообщение… (Esc — отмена)"></div>
   <div id="fps"></div>
+</div>
+
+<!-- ===== BUY MENU ===== -->
+<div id="buy-menu" class="overlay hidden">
+  <div class="buy-box">
+    <h2>МАГАЗИН <span id="buy-money"></span></h2>
+    <div id="buy-items"></div>
+    <p class="buy-hint">B / Esc — закрыть</p>
+  </div>
+</div>
+
+<!-- ===== MOBILE CONTROLS ===== -->
+<div id="mobile-ui" class="hidden">
+  <div id="joystick"><div id="joystick-knob"></div></div>
+  <div id="m-buttons">
+    <button class="m-btn" id="m-fire">🔥</button>
+    <button class="m-btn" id="m-jump">⬆</button>
+    <button class="m-btn sm" id="m-reload">R</button>
+    <button class="m-btn sm" id="m-buy">$</button>
+    <button class="m-btn sm" id="m-weapon">🔫</button>
+  </div>
 </div>
 
 <!-- ===== SCOREBOARD ===== -->
@@ -89,7 +121,7 @@
   <div class="death-box">
     <h2>ТЫ УБИТ</h2>
     <p id="death-by"></p>
-    <p class="respawn-in">Возрождение через <span id="respawn-timer">3</span>…</p>
+    <p class="respawn-in" id="respawn-note">Возрождение…</p>
   </div>
 </div>
 

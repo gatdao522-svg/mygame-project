@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STRIKE ARENA — Админка</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d0f13; color: #dfe3e8; font-family: 'Segoe UI', Roboto, Arial, sans-serif; padding: 24px; }
+h1 { color: #f2b632; letter-spacing: 3px; font-size: 24px; margin-bottom: 18px; }
+h2 { font-size: 14px; letter-spacing: 2px; color: #8a93a0; text-transform: uppercase; margin: 22px 0 10px; }
+.card { background: #14171c; border: 1px solid #262b33; border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+input, select, button { font: inherit; }
+input, select { background: #1b1f26; border: 1px solid #2c313a; color: #fff; padding: 9px 12px; border-radius: 7px; outline: none; }
+input:focus { border-color: #f2b632; }
+button { background: #f2b632; color: #1a1405; border: none; padding: 9px 16px; border-radius: 7px; font-weight: 700; cursor: pointer; }
+button:hover { filter: brightness(1.1); }
+button.danger { background: #d24a3a; color: #fff; }
+button.ghost { background: #232830; color: #cfd3d9; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #232830; }
+th { color: #8a93a0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+td .t { color: #e8a33d; } td .ct { color: #5ba2e8; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+#login-box { max-width: 380px; margin: 12vh auto; text-align: center; }
+#login-box input { width: 100%; margin: 12px 0; text-align: center; }
+#login-box button { width: 100%; }
+.hidden { display: none !important; }
+#logs { font-family: monospace; font-size: 12px; max-height: 280px; overflow-y: auto; background: #0c0e11; border-radius: 7px; padding: 10px; }
+#logs div { padding: 1px 0; color: #9aa4af; }
+#logs .admin { color: #f2b632; } #logs .anticheat { color: #f55; } #logs .round { color: #6fc46f; }
+.stat { display: inline-block; margin-right: 22px; }
+.stat b { color: #fff; font-size: 18px; }
+.stat span { color: #8a93a0; font-size: 11px; display: block; text-transform: uppercase; letter-spacing: 1px; }
+#err { color: #f66; min-height: 18px; margin-top: 8px; font-size: 13px; }
+td button { padding: 4px 10px; font-size: 12px; margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<div id="login-box">
+  <h1>STRIKE ARENA · АДМИНКА</h1>
+  <div class="card">
+    <input id="pass" type="password" placeholder="Пароль админа" autocomplete="off">
+    <button id="login-btn">ВОЙТИ</button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<div id="panel" class="hidden">
+  <h1>STRIKE ARENA · АДМИНКА</h1>
+
+  <div class="card" id="stats"></div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Управление</h2>
+    <div class="row">
+      <select id="map-select"></select>
+      <button id="map-btn">Сменить карту</button>
+      <button id="restart-btn" class="ghost">Перезапуск раунда</button>
+      <button id="resetmatch-btn" class="ghost">Сброс матча</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="say-input" placeholder="Сообщение всем игрокам" style="flex:1; min-width:220px">
+      <button id="say-btn">Отправить</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Игроки</h2>
+    <table id="players-table">
+      <thead><tr><th>Ник</th><th>Команда</th><th>У/С</th><th>$</th><th>HP</th><th>Флаги АЧ</th><th>IP</th><th>Действия</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Баны</h2>
+    <table id="bans-table">
+      <thead><tr><th>IP</th><th>Ник</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Логи сервера</h2>
+    <div id="logs"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let PASS = sessionStorage.getItem('admin-pass') || '';
+
+async function api(path, body) {
+  const res = await fetch('/api/admin/' + path, {
+    method: body !== undefined ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Pass': PASS },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.status);
+  return data;
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function login() {
+  PASS = $('pass').value;
+  $('err').textContent = '';
+  try {
+    await api('login', {});
+    sessionStorage.setItem('admin-pass', PASS);
+    $('login-box').classList.add('hidden');
+    $('panel').classList.remove('hidden');
+    refresh();
+    setInterval(refresh, 2000);
+  } catch (e) {
+    $('err').textContent = e.message;
+  }
+}
+$('login-btn').onclick = login;
+$('pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+
+let mapsLoaded = false;
+async function refresh() {
+  let s;
+  try { s = await api('state'); } catch (e) { return; }
+  const up = Math.floor(s.uptime / 60);
+  $('stats').innerHTML =
+    `<span class="stat"><b>${s.players.length}</b><span>онлайн</span></span>` +
+    `<span class="stat"><b>${esc(s.map)}</b><span>карта</span></span>` +
+    `<span class="stat"><b>${esc(s.phase)}</b><span>фаза</span></span>` +
+    `<span class="stat"><b>${s.score.t}:${s.score.ct}</b><span>T:CT (раунд ${s.roundNo})</span></span>` +
+    `<span class="stat"><b>${up} мин</b><span>аптайм</span></span>`;
+
+  if (!mapsLoaded) {
+    $('map-select').innerHTML = s.maps.map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+    mapsLoaded = true;
+  }
+
+  $('players-table').querySelector('tbody').innerHTML = s.players.map((p) =>
+    `<tr><td>${esc(p.name)}</td><td><span class="${p.team}">${p.team.toUpperCase()}</span></td>` +
+    `<td>${p.kills}/${p.deaths}</td><td>$${p.money}</td><td>${p.alive ? p.hp : '💀'}</td>` +
+    `<td>${p.flags || 0}</td><td>${esc(p.ip)}</td>` +
+    `<td><button class="ghost" onclick="act('kick','${p.id}')">Кик</button>` +
+    `<button class="danger" onclick="act('ban','${p.id}')">Бан</button>` +
+    `<button class="ghost" onclick="mute('${p.id}', ${!p.muted})">${p.muted ? 'Размут' : 'Мут'}</button></td></tr>`
+  ).join('') || '<tr><td colspan="8" style="color:#667">Пусто</td></tr>';
+
+  $('bans-table').querySelector('tbody').innerHTML = s.bans.map((b) =>
+    `<tr><td>${esc(b.ip)}</td><td>${esc(b.name || '—')}</td>` +
+    `<td><button class="ghost" onclick="unban('${esc(b.ip)}')">Разбан</button></td></tr>`
+  ).join('') || '<tr><td colspan="3" style="color:#667">Нет банов</td></tr>';
+
+  const logs = $('logs');
+  const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 10;
+  logs.innerHTML = s.logs.map((l) =>
+    `<div class="${l.type}">[${new Date(l.t).toLocaleTimeString('ru')}] [${l.type}] ${esc(l.msg)}</div>`
+  ).join('');
+  if (atBottom) logs.scrollTop = logs.scrollHeight;
+}
+
+window.act = async (action, id) => {
+  if (action === 'ban' && !confirm('Забанить игрока по IP?')) return;
+  try { await api(action, { id }); refresh(); } catch (e) { alert(e.message); }
+};
+window.mute = async (id, on) => { try { await api('mute', { id, on }); refresh(); } catch (e) { alert(e.message); } };
+window.unban = async (ip) => { try { await api('unban', { ip }); refresh(); } catch (e) { alert(e.message); } };
+
+$('map-btn').onclick = () => api('map', { map: $('map-select').value }).catch((e) => alert(e.message));
+$('restart-btn').onclick = () => api('restart', {}).catch((e) => alert(e.message));
+$('resetmatch-btn').onclick = () => confirm('Сбросить матч?') && api('resetmatch', {}).catch((e) => alert(e.message));
+$('say-btn').onclick = () => {
+  const t = $('say-input').value.trim();
+  if (t) api('say', { text: t }).then(() => { $('say-input').value = ''; }).catch((e) => alert(e.message));
+};
+
+if (PASS) login();
+</script>
+</body>
+</html>

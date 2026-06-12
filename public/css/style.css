@@ -112,3 +112,48 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0c; f
 #death-by { color: #ccc; margin: 12px 0; font-size: 17px; }
 .respawn-in { color: #999; }
 #respawn-timer { color: #f2b632; font-weight: 800; font-size: 22px; }
+
+/* ===== v2: money / timer / banner ===== */
+#money { margin-top: 6px; font-size: 22px; font-weight: 800; color: #8fd45e; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+.sc-mid { display: inline-flex; flex-direction: column; align-items: center; min-width: 72px; }
+#round-timer { font-size: 20px; font-weight: 800; color: #fff; }
+#round-timer.warn { color: #f55; animation: blink 1s infinite; }
+#round-label { font-size: 10px; color: #9aa0a8; letter-spacing: 1px; }
+@keyframes blink { 50% { opacity: .35; } }
+#banner { position: absolute; left: 50%; top: 26%; transform: translateX(-50%); text-align: center; pointer-events: none; }
+#banner-title { font-size: 44px; font-weight: 900; letter-spacing: 4px; color: #f2b632; text-shadow: 0 0 26px rgba(0,0,0,.8), 0 2px 4px rgba(0,0,0,.9); }
+#banner-sub { font-size: 16px; color: #dfe3e8; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+#protect-hint { position: absolute; left: 50%; top: 60%; transform: translateX(-50%); color: #7fd4ff; font-size: 14px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+.chat-line .srv { color: #9fb4c8; }
+
+/* ===== buy menu ===== */
+#buy-menu { background: rgba(8,10,14,.78); backdrop-filter: blur(3px); z-index: 60; }
+.buy-box { width: 380px; max-width: 94vw; max-height: 86vh; overflow-y: auto; background: #14171c; border: 1px solid #2c313a; border-radius: 12px; padding: 20px 22px; color: #e8e6e0; }
+.buy-box h2 { font-size: 20px; letter-spacing: 3px; color: #f2b632; display: flex; justify-content: space-between; }
+#buy-money { color: #8fd45e; }
+.buy-section { margin: 14px 0 6px; font-size: 11px; letter-spacing: 2px; color: #788; text-transform: uppercase; }
+.buy-item { display: flex; justify-content: space-between; width: 100%; padding: 10px 14px; margin: 4px 0; background: #1b1f26; border: 1px solid #2c313a; border-radius: 8px; color: #dfe3e8; font-size: 15px; cursor: pointer; transition: all .12s; }
+.buy-item:hover { border-color: #f2b632; background: #221f14; }
+.buy-item.cant { opacity: .38; cursor: not-allowed; }
+.bi-price { color: #8fd45e; font-weight: 700; }
+.buy-hint { margin-top: 12px; color: #66707c; font-size: 12px; text-align: center; }
+
+/* ===== skins ===== */
+.skin-row { margin: 4px 0 10px; text-align: left; color: #9aa0a8; font-size: 13px; }
+#skin-select { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.skin-btn { width: 42px; height: 30px; border-radius: 6px; border: 2px solid #2c313a; cursor: pointer; }
+.skin-btn.selected { border-color: #f2b632; box-shadow: 0 0 8px rgba(242,182,50,.5); }
+
+/* ===== mobile ===== */
+#mobile-ui { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+#joystick { position: absolute; left: 26px; bottom: 90px; width: 130px; height: 130px; border-radius: 50%; background: rgba(255,255,255,.07); border: 2px solid rgba(255,255,255,.18); pointer-events: auto; touch-action: none; }
+#joystick-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px; border-radius: 50%; background: rgba(255,255,255,.22); border: 2px solid rgba(255,255,255,.3); }
+#m-buttons { position: absolute; right: 18px; bottom: 70px; display: grid; grid-template-columns: repeat(2, 64px); gap: 12px; pointer-events: auto; }
+.m-btn { width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,.1); border: 2px solid rgba(255,255,255,.22); color: #fff; font-size: 22px; touch-action: none; }
+.m-btn.sm { width: 50px; height: 50px; font-size: 16px; }
+#m-fire { width: 78px; height: 78px; background: rgba(242,80,50,.25); border-color: rgba(242,120,80,.5); }
+.m-btn:active { background: rgba(255,255,255,.3); }
+@media (pointer: coarse) {
+  .controls-hint { display: none; }
+  .menu-box h1 { font-size: 38px; }
+}

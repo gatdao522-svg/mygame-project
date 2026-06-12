@@ -1,5 +1,5 @@
 // ===== HUD / UI management =====
-import { TEAM_INFO, WEAPONS } from './config.js';
+import { TEAM_INFO, WEAPONS, BUY_MENU } from './config.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -9,6 +9,7 @@ export class UI {
     this.minimapCtx = $('minimap').getContext('2d');
     this.mmStatic = null;
     this.fpsAcc = 0; this.fpsN = 0; this.fpsT = 0;
+    this.money = 0;
   }
 
   // ---- HUD basics ----
@@ -24,10 +25,16 @@ export class UI {
     this.setAmmo(ammo);
   }
   setAmmo(a) {
-    $('ammo').textContent = a.mag === Infinity ? '—' : a.mag;
-    $('reserve').textContent = a.reserve === Infinity ? '—' : a.reserve;
+    $('ammo').textContent = a.mag === Infinity || a.mag < 0 ? '—' : a.mag;
+    $('reserve').textContent = a.reserve === Infinity || a.reserve < 0 ? '—' : a.reserve;
+  }
+  setMoney(m) {
+    this.money = m;
+    $('money').textContent = `$${m}`;
+    if (this._buyOpen) this._refreshBuyAfford();
   }
   setReloading(on) { $('reload-hint').classList.toggle('hidden', !on); }
+  setProtected(on) { $('protect-hint').classList.toggle('hidden', !on); }
   setCrosshairGap(spreadPx, hide) {
     const ch = $('crosshair');
     ch.style.display = hide ? 'none' : '';
@@ -35,10 +42,33 @@ export class UI {
   }
   setScope(on) { $('scope').classList.toggle('hidden', !on); }
 
+  // ---- round HUD ----
+  setRoundTimer(msLeft, warn) {
+    const el = $('round-timer');
+    if (msLeft == null) { el.textContent = '—:—'; el.classList.remove('warn'); return; }
+    const s = Math.max(0, Math.ceil(msLeft / 1000));
+    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    el.classList.toggle('warn', !!warn);
+  }
+  setRoundScore(t, ct, roundNo, phase) {
+    $('score-t').textContent = t;
+    $('score-ct').textContent = ct;
+    $('round-label').textContent = phase === 'warmup' ? 'РАЗМИНКА' : (roundNo ? `РАУНД ${roundNo}` : '');
+  }
+  banner(text, sub = '', ms = 2600) {
+    const el = $('banner');
+    $('banner-title').textContent = text;
+    $('banner-sub').textContent = sub;
+    el.classList.remove('hidden');
+    clearTimeout(this._bT);
+    if (ms > 0) this._bT = setTimeout(() => el.classList.add('hidden'), ms);
+  }
+  hideBanner() { $('banner').classList.add('hidden'); clearTimeout(this._bT); }
+
   hitmarker(headshot) {
     const hm = $('hitmarker');
     hm.classList.remove('show', 'hs');
-    void hm.offsetWidth; // restart animation
+    void hm.offsetWidth;
     if (headshot) hm.classList.add('hs');
     hm.classList.add('show');
   }
@@ -56,6 +86,40 @@ export class UI {
     }
   }
 
+  // ---- buy menu ----
+  initBuyMenu(onBuy) {
+    const wrap = $('buy-items');
+    wrap.innerHTML = '';
+    for (const [label, items] of Object.entries(BUY_MENU)) {
+      const h = document.createElement('div');
+      h.className = 'buy-section';
+      h.textContent = label;
+      wrap.appendChild(h);
+      for (const wid of items) {
+        const w = WEAPONS[wid];
+        const btn = document.createElement('button');
+        btn.className = 'buy-item';
+        btn.dataset.weapon = wid;
+        btn.dataset.price = w.price;
+        btn.innerHTML = `<span class="bi-name">${w.name}</span><span class="bi-price">$${w.price}</span>`;
+        btn.addEventListener('click', () => onBuy(wid));
+        wrap.appendChild(btn);
+      }
+    }
+  }
+  showBuyMenu(on) {
+    this._buyOpen = on;
+    $('buy-menu').classList.toggle('hidden', !on);
+    if (on) this._refreshBuyAfford();
+  }
+  isBuyOpen() { return !!this._buyOpen; }
+  _refreshBuyAfford() {
+    for (const btn of document.querySelectorAll('.buy-item')) {
+      btn.classList.toggle('cant', this.money < +btn.dataset.price && !this._buyFree);
+    }
+  }
+  setBuyFree(free) { this._buyFree = free; if (this._buyOpen) this._refreshBuyAfford(); }
+
   // ---- killfeed / chat / messages ----
   addKill(k) {
     const el = document.createElement('div');
@@ -72,10 +136,12 @@ export class UI {
     const log = $('chat-log');
     const el = document.createElement('div');
     el.className = 'chat-line';
-    el.innerHTML = `<b class="${team}">${esc(name)}:</b> ${esc(text)}`;
+    el.innerHTML = name === null
+      ? `<i class="srv">${esc(text)}</i>`
+      : `<b class="${team}">${esc(name)}:</b> ${esc(text)}`;
     log.appendChild(el);
     setTimeout(() => el.remove(), 9000);
-    while (log.children.length > 6) log.firstChild.remove();
+    while (log.children.length > 8) log.firstChild.remove();
   }
 
   centerMsg(text, ms = 2200) {
@@ -84,11 +150,6 @@ export class UI {
     el.classList.remove('hidden');
     clearTimeout(this._cmT);
     this._cmT = setTimeout(() => el.classList.add('hidden'), ms);
-  }
-
-  setTeamScores(t, ct) {
-    $('score-t').textContent = t;
-    $('score-ct').textContent = ct;
   }
 
   // ---- scoreboard ----
@@ -109,43 +170,38 @@ export class UI {
   showScoreboard(on) { $('scoreboard').classList.toggle('hidden', !on); }
 
   // ---- death ----
-  showDeath(killerName, seconds) {
+  showDeath(killerName, waitRound) {
     $('death-by').textContent = killerName ? `Тебя убил ${killerName}` : '';
+    $('respawn-note').textContent = waitRound ? 'Ждём следующий раунд…' : 'Возрождение…';
     $('death').classList.remove('hidden');
-    const timerEl = $('respawn-timer');
-    let left = seconds;
-    timerEl.textContent = left.toFixed(0);
-    clearInterval(this._deathI);
-    this._deathI = setInterval(() => {
-      left -= 1;
-      timerEl.textContent = Math.max(0, left).toFixed(0);
-      if (left <= 0) clearInterval(this._deathI);
-    }, 1000);
   }
-  hideDeath() { $('death').classList.add('hidden'); clearInterval(this._deathI); }
+  hideDeath() { $('death').classList.add('hidden'); }
 
   // ---- minimap ----
   initMinimap(mapData) {
+    const [W, D] = mapData.size;
     const c = document.createElement('canvas');
     c.width = 180; c.height = 150;
     const ctx = c.getContext('2d');
     ctx.fillStyle = 'rgba(20,24,30,.9)';
     ctx.fillRect(0, 0, 180, 150);
-    const sx = 180 / 100, sz = 150 / 80;
-    ctx.fillStyle = 'rgba(205,185,140,.8)';
+    const sx = 180 / W, sz = 150 / D;
+    const ox = W / 2, oz = D / 2;
     const drawBox = (cx, cz, w, d) => {
-      ctx.fillRect((cx - w / 2 + 50) * sx, (cz - d / 2 + 40) * sz, w * sx, d * sz);
+      ctx.fillRect((cx - w / 2 + ox) * sx, (cz - d / 2 + oz) * sz, Math.max(1, w * sx), Math.max(1, d * sz));
     };
+    ctx.fillStyle = 'rgba(205,185,140,.8)';
     for (const [cx, cz, w, d] of mapData.walls) drawBox(cx, cz, w, d);
     ctx.fillStyle = 'rgba(150,150,160,.7)';
     for (const [cx, cz, w, d] of mapData.lows) drawBox(cx, cz, w, d);
     ctx.fillStyle = 'rgba(140,105,60,.85)';
     for (const [cx, cz, size] of mapData.crates) drawBox(cx, cz, size, size);
     ctx.font = 'bold 11px Arial'; ctx.fillStyle = 'rgba(255,120,80,.9)';
-    ctx.fillText('B', (-30 + 50) * sx - 3, (-25 + 40) * sz + 4);
-    ctx.fillText('A', (30 + 50) * sx - 3, (25 + 40) * sz + 4);
+    for (const [letter, x, z] of mapData.sites || []) {
+      ctx.fillText(letter, (x + ox) * sx - 3, (z + oz) * sz + 4);
+    }
     this.mmStatic = c;
-    this.mmScale = { sx, sz };
+    this.mmScale = { sx, sz, ox, oz };
   }
 
   drawMinimap(me, remotes, myTeam) {
@@ -153,17 +209,15 @@ export class UI {
     const ctx = this.minimapCtx;
     ctx.clearRect(0, 0, 180, 150);
     ctx.drawImage(this.mmStatic, 0, 0);
-    const { sx, sz } = this.mmScale;
-    const px = (me.x + 50) * sx, pz = (me.z + 40) * sz;
-    // teammates
+    const { sx, sz, ox, oz } = this.mmScale;
+    const px = (me.x + ox) * sx, pz = (me.z + oz) * sz;
     for (const a of remotes.values()) {
       if (!a.alive || a.team !== myTeam) continue;
       ctx.fillStyle = a.team === 't' ? '#e8a33d' : '#5ba2e8';
       ctx.beginPath();
-      ctx.arc((a.group.position.x + 50) * sx, (a.group.position.z + 40) * sz, 3, 0, 7);
+      ctx.arc((a.group.position.x + ox) * sx, (a.group.position.z + oz) * sz, 3, 0, 7);
       ctx.fill();
     }
-    // self with view direction
     ctx.save();
     ctx.translate(px, pz);
     ctx.rotate(me.yaw + Math.PI);
