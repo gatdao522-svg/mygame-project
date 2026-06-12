@@ -87,6 +87,35 @@ function losBlocked(colliders, from, to) {
 // ---------- game state ----------
 const ROTATION = Object.keys(MAPS);
 let mapId = 'arena';
+
+// ---------- game modes ----------
+const MODES = {
+  comp: { label: 'Соревновательный', rounds: true, respawn: false, buyAnytime: false, zombie: false, freeMoney: false },
+  dm: { label: 'Deathmatch', rounds: false, respawn: true, buyAnytime: true, zombie: false, freeMoney: true, matchMs: 10 * 60000, killLimit: 50, respawnMs: 3500 },
+  zombie: { label: 'Зомби-режим', rounds: true, respawn: false, buyAnytime: false, zombie: true, freeMoney: false, zombieHp: 150, firstZombieHp: 200, zombieRespawnMs: 5000 },
+};
+let gameMode = 'comp';
+const MODE = () => MODES[gameMode];
+
+function zombieKit(p, hp) {
+  p.hp = hp;
+  p.alive = true;
+  p.loadout = { primary: null, secondary: null };
+  p.weapon = 'knife';
+  p.ammo = { knife: freshAmmo('knife') };
+  p.reloadUntil = 0; p.reloadingWeapon = null;
+  if (p.skin !== 'toxic') { p.origSkin = p.origSkin || p.skin; p.skin = 'toxic'; }
+}
+
+function convertToZombie(p, firstWave) {
+  p.team = 't';
+  zombieKit(p, firstWave ? MODE().firstZombieHp : MODE().zombieHp);
+  p.protectedUntil = now() + 1500;
+  sendPrivate(p);
+  io.emit('player-update', pub(p));
+  io.to(p.id).emit('infected', {});
+  io.emit('server-msg', { text: `🧟 ${p.name} заражён!` });
+}
 let colliders = buildColliders(MAPS[mapId]);
 const players = new Map(); // socket.id -> player
 const ipConns = new Map(); // ip -> count
@@ -162,6 +191,7 @@ function resetPlayerForRound(p, full) {
   }
   p.ammo.knife = freshAmmo('knife');
   if (!p.loadout[CFG.WEAPONS[p.weapon]?.slot] && p.weapon !== 'knife') p.weapon = p.loadout.secondary || 'knife';
+  if (MODE().freeMoney) p.money = CFG.ECONOMY.max;
 }
 
 function teamCounts() {
@@ -177,6 +207,7 @@ function roundPayload() {
   return {
     phase: round.phase, endsAt: round.endsAt, roundNo: round.roundNo,
     score: round.score, winner: round.winner, mapId,
+    mode: gameMode, modeLabel: MODE().label,
     buyUntil: round.liveStartAt ? round.liveStartAt - CFG.ROUND.freezeMs + CFG.ROUND.buyMs : 0,
   };
 }
@@ -188,6 +219,17 @@ function startMatch() {
   round.roundNo = 0;
   round.score = { t: 0, ct: 0 };
   for (const p of players.values()) p.money = CFG.ECONOMY.start;
+  if (!MODE().rounds) { // deathmatch: one long live phase
+    round.phase = 'live';
+    round.roundNo = 1;
+    round.winner = null;
+    round.endsAt = now() + MODE().matchMs;
+    round.liveStartAt = 0;
+    for (const p of players.values()) { resetPlayerForRound(p, true); sendPrivate(p); }
+    broadcastRound();
+    slog('round', `deathmatch started (${MODE().matchMs / 60000} min, до ${MODE().killLimit} убийств)`);
+    return;
+  }
   startFreeze(true);
   slog('round', 'match started');
 }
@@ -198,9 +240,15 @@ function startFreeze(fullReset) {
   round.winner = null;
   round.endsAt = now() + CFG.ROUND.freezeMs;
   round.liveStartAt = round.endsAt;
+  const zombieReset = MODE().zombie;
   for (const p of players.values()) {
-    resetPlayerForRound(p, fullReset);
+    if (zombieReset) { // everyone starts the round human; zombies picked at live start
+      p.team = 'ct';
+      if (p.origSkin) { p.skin = p.origSkin; p.origSkin = null; }
+    }
+    resetPlayerForRound(p, fullReset || zombieReset);
     sendPrivate(p);
+    if (zombieReset) io.emit('player-update', pub(p));
   }
   broadcastRound();
 }
@@ -208,6 +256,15 @@ function startFreeze(fullReset) {
 function startLive() {
   round.phase = 'live';
   round.endsAt = now() + CFG.ROUND.liveMs;
+  if (MODE().zombie) {
+    const pool = [...players.values()].filter((p) => p.alive);
+    const nZombies = Math.max(1, Math.floor(pool.length / 5));
+    for (let i = 0; i < nZombies && pool.length; i++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      convertToZombie(pool.splice(idx, 1)[0], true);
+    }
+    io.emit('server-msg', { text: `🧟 Заражение началось! Выжившие — продержитесь до конца раунда!` });
+  }
   broadcastRound();
 }
 
@@ -231,6 +288,22 @@ function endRound(winner, reason) {
 function checkRoundWin() {
   if (round.phase !== 'live') return;
   const c = teamCounts();
+  if (MODE().zombie) {
+    if (players.size < 2) { toWarmup(); return; }
+    if (c.ct === 0) endRound('t', 'все заражены');        // everyone converted
+    else if (c.t === 0) endRound('ct', 'зомби закончились'); // zombies left the server
+    return;
+  }
+  if (!MODE().rounds) { // deathmatch: kill limit
+    if (round.score.t >= MODE().killLimit || round.score.ct >= MODE().killLimit) {
+      round.phase = 'matchend';
+      round.endsAt = now() + 12000;
+      round.winner = round.score.t > round.score.ct ? 't' : 'ct';
+      broadcastRound();
+      slog('round', `DM over by kill limit: ${round.winner} wins ${round.score.t}:${round.score.ct}`);
+    }
+    return;
+  }
   if (c.t === 0 || c.ct === 0) { toWarmup(); return; }
   if (c.tAlive === 0) endRound('ct', 'elimination');
   else if (c.ctAlive === 0) endRound('t', 'elimination');
@@ -244,7 +317,8 @@ function toWarmup() {
   round.endsAt = 0;
   for (const p of players.values()) {
     p.money = CFG.ECONOMY.start;
-    resetPlayerForRound(p, false);
+    if (p.origSkin) { p.skin = p.origSkin; p.origSkin = null; io.emit('player-update', pub(p)); }
+    resetPlayerForRound(p, MODE().zombie);
     sendPrivate(p);
   }
   broadcastRound();
@@ -264,10 +338,35 @@ setInterval(() => {
     }
     return;
   }
-  if (c.t === 0 || c.ct === 0 || players.size < 2) { toWarmup(); return; }
+  if (MODE().zombie ? players.size < 2 : (c.t === 0 || c.ct === 0 || players.size < 2)) { toWarmup(); return; }
+  // deathmatch: continuous respawns during live
+  if (MODE().respawn && round.phase === 'live') {
+    for (const p of players.values()) {
+      if (!p.alive && t > p.respawnAt) { resetPlayerForRound(p, false); sendPrivate(p); io.emit('respawned', { id: p.id, pos: p.pos }); }
+    }
+  }
+  // zombie mode: dead zombies rise again until the round ends
+  if (MODE().zombie && round.phase === 'live') {
+    for (const p of players.values()) {
+      if (p.team === 't' && !p.alive && t > p.respawnAt) {
+        zombieKit(p, MODE().zombieHp);
+        p.pos = spawnPos('t');
+        p.protectedUntil = t + 1500;
+        sendPrivate(p);
+        io.emit('respawned', { id: p.id, pos: p.pos });
+      }
+    }
+  }
   if (round.phase === 'freeze' && t >= round.endsAt) startLive();
-  else if (round.phase === 'live' && t >= round.endsAt) endRound('ct', 'timeout');
-  else if (round.phase === 'end' && t >= round.endsAt) {
+  else if (round.phase === 'live' && t >= round.endsAt) {
+    if (!MODE().rounds) { // deathmatch timer over
+      round.phase = 'matchend';
+      round.endsAt = t + 12000;
+      round.winner = round.score.t === round.score.ct ? null : (round.score.t > round.score.ct ? 't' : 'ct');
+      broadcastRound();
+      slog('round', `DM over by timer: ${round.winner || 'draw'} ${round.score.t}:${round.score.ct}`);
+    } else endRound('ct', MODE().zombie ? 'выжившие продержались' : 'timeout');
+  } else if (round.phase === 'end' && t >= round.endsAt) {
     if (round.score.t >= CFG.ROUND.winsToFinish || round.score.ct >= CFG.ROUND.winsToFinish) {
       round.phase = 'matchend';
       round.endsAt = t + 12000;
@@ -360,6 +459,7 @@ app.post('/api/admin/login', adminAuth, (req, res) => res.json({ ok: true }));
 app.get('/api/admin/state', adminAuth, (req, res) => {
   res.json({
     map: mapId, maps: Object.keys(MAPS).map((id) => ({ id, label: MAPS[id].label })),
+    mode: gameMode, modes: Object.keys(MODES).map((id) => ({ id, label: MODES[id].label })),
     phase: round.phase, score: round.score, roundNo: round.roundNo,
     uptime: Math.round(process.uptime()),
     players: [...players.values()].map((p) => ({
@@ -411,6 +511,13 @@ app.post('/api/admin/mute', adminAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/admin/mode', adminAuth, (req, res) => {
+  const id = String(req.body.mode || '');
+  if (!MODES[id]) return res.status(400).json({ error: 'Нет такого режима' });
+  if (id !== gameMode) changeMode(id);
+  res.json({ ok: true });
+});
+
 app.post('/api/admin/map', adminAuth, (req, res) => {
   const id = String(req.body.map || '');
   if (!MAPS[id]) return res.status(400).json({ error: 'Нет такой карты' });
@@ -438,6 +545,16 @@ app.post('/api/admin/say', adminAuth, (req, res) => {
   slog('admin', `say: ${text}`);
   res.json({ ok: true });
 });
+
+function changeMode(id) {
+  gameMode = id;
+  slog('admin', `mode -> ${id}`);
+  io.emit('server-msg', { text: `Режим игры: ${MODE().label}` });
+  for (const p of players.values()) { // strip zombie state when leaving zombie mode
+    if (p.origSkin) { p.skin = p.origSkin; p.origSkin = null; io.emit('player-update', pub(p)); }
+  }
+  toWarmup();
+}
 
 function changeMap(id) {
   mapId = id;
@@ -509,10 +626,18 @@ io.on('connection', (socket) => {
       stateBudget: 40, stateBudgetAt: now(),
       lastChatAt: 0, lastStateT: now(),
     };
-    // joining mid-round: wait for next round
+    // joining mid-round: dm respawns instantly, zombie mode joins the horde
     if (round.phase === 'live' || round.phase === 'end') {
-      p.alive = false;
-      p.deadUntilRound = true;
+      if (MODE().respawn) {
+        // deathmatch: spawn right away (already alive)
+      } else if (MODE().zombie && round.phase === 'live') {
+        p.team = 't';
+        zombieKit(p, MODE().zombieHp);
+        p.pos = spawnPos('t');
+      } else {
+        p.alive = false;
+        p.deadUntilRound = true;
+      }
     }
     players.set(socket.id, p);
     slog('join', `${name} [${team}] ${ip} (${players.size} online)`);
@@ -670,9 +795,7 @@ io.on('connection', (socket) => {
       socket.emit('hit-confirm', { id: victim.id, zone, dmg, hp: victim.hp });
 
       if (victim.hp <= 0) {
-        victim.alive = false;
         victim.deaths++;
-        victim.respawnAt = t + 3500; // only used in warmup
         p.kills++;
         const reward = w.killReward ?? 300;
         p.money = Math.min(CFG.ECONOMY.max, p.money + reward);
@@ -681,10 +804,16 @@ io.on('connection', (socket) => {
           victim: victim.id, victimName: victim.name, victimTeam: victim.team,
           weapon: wid, headshot: zone === 'head',
         });
-        io.to(victim.id).emit('died', { by: p.name, waitRound: round.phase !== 'warmup' });
+        if (MODE().zombie && round.phase === 'live' && p.team === 't' && victim.team === 'ct') {
+          convertToZombie(victim, false); // bitten: rises as a zombie on the spot
+        } else {
+          victim.alive = false;
+          victim.respawnAt = t + (MODE().zombie ? MODE().zombieRespawnMs : (MODE().respawnMs || 3500));
+          io.to(victim.id).emit('died', { by: p.name, waitRound: !MODE().respawn && !(MODE().zombie && victim.team === 't') && round.phase !== 'warmup' });
+        }
+        if (!MODE().rounds && round.phase === 'live') { round.score[p.team]++; broadcastRound(); }
         socket.emit('reward', { money: p.money, delta: reward });
         checkRoundWin();
-        if (!victim.alive && round.phase === 'warmup') { /* tick respawns */ }
         break; // one kill per shot is enough to stop processing further hits on same victim
       }
     }
@@ -711,7 +840,8 @@ io.on('connection', (socket) => {
     const t = now();
     const fail = (reason) => socket.emit('buy-fail', { reason });
     if (!w || w.slot === 'melee') return fail('Нельзя купить');
-    const buyOpen = round.phase === 'warmup' || round.phase === 'freeze' ||
+    if (MODE().zombie && p.team === 't' && round.phase !== 'warmup') return fail('Зомби не покупают — кусай!');
+    const buyOpen = MODE().buyAnytime || round.phase === 'warmup' || round.phase === 'freeze' ||
       (round.phase === 'live' && t < round.liveStartAt - CFG.ROUND.freezeMs + CFG.ROUND.buyMs);
     if (!buyOpen) return fail('Время покупки вышло');
     if (!p.alive) return fail('Ты мёртв');

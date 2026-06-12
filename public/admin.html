@@ -57,6 +57,8 @@ td button { padding: 4px 10px; font-size: 12px; margin-right: 4px; }
     <div class="row">
       <select id="map-select"></select>
       <button id="map-btn">Сменить карту</button>
+      <select id="mode-select"></select>
+      <button id="mode-btn">Сменить режим</button>
       <button id="restart-btn" class="ghost">Перезапуск раунда</button>
       <button id="resetmatch-btn" class="ghost">Сброс матча</button>
     </div>
@@ -130,12 +132,15 @@ async function refresh() {
   $('stats').innerHTML =
     `<span class="stat"><b>${s.players.length}</b><span>онлайн</span></span>` +
     `<span class="stat"><b>${esc(s.map)}</b><span>карта</span></span>` +
+    `<span class="stat"><b>${esc((s.modes.find((m) => m.id === s.mode) || {}).label || s.mode)}</b><span>режим</span></span>` +
     `<span class="stat"><b>${esc(s.phase)}</b><span>фаза</span></span>` +
     `<span class="stat"><b>${s.score.t}:${s.score.ct}</b><span>T:CT (раунд ${s.roundNo})</span></span>` +
     `<span class="stat"><b>${up} мин</b><span>аптайм</span></span>`;
 
   if (!mapsLoaded) {
     $('map-select').innerHTML = s.maps.map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+    $('mode-select').innerHTML = s.modes.map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+    $('mode-select').value = s.mode;
     mapsLoaded = true;
   }
 
@@ -169,6 +174,7 @@ window.mute = async (id, on) => { try { await api('mute', { id, on }); refresh()
 window.unban = async (ip) => { try { await api('unban', { ip }); refresh(); } catch (e) { alert(e.message); } };
 
 $('map-btn').onclick = () => api('map', { map: $('map-select').value }).catch((e) => alert(e.message));
+$('mode-btn').onclick = () => api('mode', { mode: $('mode-select').value }).catch((e) => alert(e.message));
 $('restart-btn').onclick = () => api('restart', {}).catch((e) => alert(e.message));
 $('resetmatch-btn').onclick = () => confirm('Сбросить матч?') && api('resetmatch', {}).catch((e) => alert(e.message));
 $('say-btn').onclick = () => {

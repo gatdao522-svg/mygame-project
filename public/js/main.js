@@ -59,7 +59,7 @@ const keys = {};
 let mouseDown = false;
 let sensitivity = 1.0;
 let serverOffset = 0; // serverNow - Date.now()
-const round = { phase: 'warmup', endsAt: 0, roundNo: 0, score: { t: 0, ct: 0 }, buyUntil: 0 };
+const round = { phase: 'warmup', endsAt: 0, roundNo: 0, score: { t: 0, ct: 0 }, buyUntil: 0, mode: 'comp' };
 let timeWarned = false;
 let selectedSkin = localStorage.getItem('skin') || 'default';
 
@@ -205,6 +205,8 @@ document.addEventListener('visibilitychange', () => {
 // ---------- buy menu ----------
 ui.initBuyMenu((wid) => net.sendBuy(wid));
 function buyAllowed() {
+  if (round.mode === 'zombie' && player.team === 't' && round.phase !== 'warmup') return false;
+  if (round.mode === 'dm') return true;
   return round.phase === 'warmup' || round.phase === 'freeze' ||
     (round.phase === 'live' && serverNow() < round.buyUntil);
 }
@@ -344,25 +346,31 @@ net.on('you', applyYou);
 
 function applyRound(r) {
   const prevPhase = round.phase;
+  const prevMode = round.mode;
   Object.assign(round, r);
-  ui.setRoundScore(r.score.t, r.score.ct, r.roundNo, r.phase);
+  ui.setRoundScore(r.score.t, r.score.ct, r.roundNo, r.phase, r.mode);
+  if (r.mode !== prevMode) ui.setTeamLabels(r.mode);
   timeWarned = false;
   if (r.phase === prevPhase) return;
+  const zm = r.mode === 'zombie';
   if (r.phase === 'freeze') {
     weapons && (weapons.locked = true);
     ui.hideDeath();
-    ui.banner(`РАУНД ${r.roundNo}`, 'Закупка — B', 2400);
+    ui.banner(`РАУНД ${r.roundNo}`, zm ? 'Закупка — B. Зомби появятся среди вас…' : 'Закупка — B', 2400);
     audio.playFreezeBeep();
     if (!IS_TOUCH && player.joined && !player.dead) toggleBuyMenu(true);
   } else if (r.phase === 'live') {
     weapons && (weapons.locked = false);
     if (ui.isBuyOpen()) toggleBuyMenu(false);
-    ui.banner('В БОЙ!', '', 1500);
+    if (r.mode === 'dm') ui.banner('DEATHMATCH', `До ${50} убийств. Возрождение автоматическое`, 2500);
+    else ui.banner(zm ? 'ЗАРАЖЕНИЕ!' : 'В БОЙ!', zm ? 'Продержись до конца раунда' : '', 1800);
     audio.playRoundStart();
   } else if (r.phase === 'end') {
     const win = r.winner === player.team;
     ui.banner(
-      r.winner ? (r.winner === 't' ? 'БОЕВИКИ ПОБЕДИЛИ' : 'СПЕЦНАЗ ПОБЕДИЛ') : 'РАУНД ОКОНЧЕН',
+      r.winner
+        ? (zm ? (r.winner === 't' ? '🧟 ЗОМБИ ПОБЕДИЛИ' : '🛡 ЛЮДИ ВЫЖИЛИ') : (r.winner === 't' ? 'БОЕВИКИ ПОБЕДИЛИ' : 'СПЕЦНАЗ ПОБЕДИЛ'))
+        : 'РАУНД ОКОНЧЕН',
       win ? `+$3250` : '', 3000);
     if (r.winner) (win ? audio.playRoundWin : audio.playRoundLose)();
   } else if (r.phase === 'matchend') {
@@ -376,6 +384,17 @@ function applyRound(r) {
 net.on('round', applyRound);
 
 net.on('player-joined', (p) => { if (p.id !== net.id) remotes.addOrUpdateInfo(p); });
+net.on('player-update', (p) => {
+  if (p.id === net.id) { player.team = p.team; return; }
+  remotes.remove(p.id); // team/skin changed -> rebuild avatar
+  remotes.addOrUpdateInfo(p);
+});
+net.on('infected', () => {
+  player.dead = false;
+  ui.hideDeath();
+  if (ui.isBuyOpen()) toggleBuyMenu(false);
+  ui.banner('🧟 ТЫ ЗАРАЖЁН!', 'Кусай выживших (нож). Убитые тобой встают зомби', 3500);
+});
 net.on('player-left', (p) => remotes.remove(p.id));
 net.on('snapshot', (d) => {
   lastSnapshot = d.p;

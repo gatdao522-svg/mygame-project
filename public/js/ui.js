@@ -50,10 +50,18 @@ export class UI {
     el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     el.classList.toggle('warn', !!warn);
   }
-  setRoundScore(t, ct, roundNo, phase) {
+  setRoundScore(t, ct, roundNo, phase, mode = 'comp') {
     $('score-t').textContent = t;
     $('score-ct').textContent = ct;
-    $('round-label').textContent = phase === 'warmup' ? 'РАЗМИНКА' : (roundNo ? `РАУНД ${roundNo}` : '');
+    $('round-label').textContent = phase === 'warmup' ? 'РАЗМИНКА'
+      : mode === 'dm' ? 'DEATHMATCH'
+        : (roundNo ? `${mode === 'zombie' ? '🧟 ' : ''}РАУНД ${roundNo}` : '');
+  }
+  setTeamLabels(mode) {
+    const tH = $('sb-t-table').closest('.sb-team').querySelector('h3');
+    const ctH = $('sb-ct-table').closest('.sb-team').querySelector('h3');
+    if (mode === 'zombie') { tH.textContent = '🧟 Зомби'; ctH.textContent = '🛡 Выжившие'; }
+    else { tH.textContent = 'Боевики (T)'; ctH.textContent = 'Спецназ (CT)'; }
   }
   banner(text, sub = '', ms = 2600) {
     const el = $('banner');
