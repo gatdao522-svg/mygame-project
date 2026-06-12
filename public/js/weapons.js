@@ -293,6 +293,10 @@ export class WeaponSystem {
       }
       if (hit) {
         const pid = hit.object.userData.playerId;
+        const rid = hit.object.userData.resourceId;
+        const bid = hit.object.userData.blockId;
+        if (rid !== undefined && this.current === 'knife' && this.deps.onHarvest) this.deps.onHarvest(rid);
+        else if (bid !== undefined && this.deps.onBlockHit) this.deps.onBlockHit(bid);
         if (pid) {
           const zone = hit.object.userData.zone || 'body';
           const v = victims.get(pid) || { zone, pellets: 0 };

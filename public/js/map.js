@@ -191,6 +191,51 @@ export function buildMap(scene, map) {
     raycastMeshes.push(mesh);
   }
 
+  // --- rust resources (trees / rocks) ---
+  const resourceMeshes = new Map(); // id -> mesh
+  const resourceColliders = new Map(); // id -> Box3
+  const resList = map.resources || [];
+  if (resList.length) {
+    const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const paint = (g, hex) => {
+      const c = new THREE.Color(hex), n = g.attributes.position.count, arr = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      return g;
+    };
+    resList.forEach(([type, x, z], id) => {
+      let geos = [];
+      if (type === 'tree') {
+        const v = (id * 37 % 7) / 7;
+        const trunk = paint(new THREE.CylinderGeometry(0.32, 0.5, 2.6, 6), '#6b4a2c');
+        trunk.translate(0, 1.3, 0);
+        const c1 = paint(new THREE.ConeGeometry(1.9 + v * 0.4, 2.6, 7), v > 0.5 ? '#3e6b2f' : '#4a7a36');
+        c1.translate(0, 3.4, 0);
+        const c2 = paint(new THREE.ConeGeometry(1.3 + v * 0.3, 2.0, 7), v > 0.5 ? '#47793a' : '#558a40');
+        c2.translate(0, 4.7, 0);
+        geos = [trunk, c1, c2];
+      } else {
+        const r1 = paint(new THREE.DodecahedronGeometry(1.0, 0), '#8a8d90');
+        r1.scale(1.25, 0.85, 1.1); r1.rotateY(id * 1.7); r1.translate(0, 0.55, 0);
+        const r2 = paint(new THREE.DodecahedronGeometry(0.6, 0), '#7c7f83');
+        r2.translate(0.8, 0.35, 0.4);
+        geos = [r1, r2];
+      }
+      const mesh = new THREE.Mesh(mergeGeometries(geos), treeMat);
+      mesh.position.set(x, 0, z);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData.resourceId = id;
+      scene.add(mesh);
+      raycastMeshes.push(mesh);
+      resourceMeshes.set(id, mesh);
+      const box = type === 'tree'
+        ? new THREE.Box3(new THREE.Vector3(x - 0.45, 0, z - 0.45), new THREE.Vector3(x + 0.45, 5, z + 0.45))
+        : new THREE.Box3(new THREE.Vector3(x - 0.9, 0, z - 0.9), new THREE.Vector3(x + 0.9, 1.5, z + 0.9));
+      colliders.push(box);
+      resourceColliders.set(id, box);
+    });
+  }
+
   // --- site letters on floor ---
   for (const [letter, x, z] of map.sites || []) {
     const c = document.createElement('canvas'); c.width = c.height = 128;
@@ -240,5 +285,44 @@ export function buildMap(scene, map) {
   sun.shadow.bias = -0.0005;
   scene.add(sun);
 
-  return { colliders, raycastMeshes, mapData: map };
+  const blockMeshes = new Map(); // id -> {mesh, box}
+  const world = {
+    colliders, raycastMeshes, mapData: map,
+    setResourceAlive(id, alive) {
+      const mesh = resourceMeshes.get(id), box = resourceColliders.get(id);
+      if (!mesh) return;
+      mesh.visible = alive;
+      const ci = colliders.indexOf(box), ri = raycastMeshes.indexOf(mesh);
+      if (alive) {
+        if (ci < 0) colliders.push(box);
+        if (ri < 0) raycastMeshes.push(mesh);
+      } else {
+        if (ci >= 0) colliders.splice(ci, 1);
+        if (ri >= 0) raycastMeshes.splice(ri, 1);
+      }
+    },
+    addBlock(b) {
+      if (blockMeshes.has(b.id)) return;
+      const w = b.horiz ? 2.6 : 0.3, d = b.horiz ? 0.3 : 2.6;
+      const mesh = new THREE.Mesh(boxGeo(w, 2.2, d, 0.8), new THREE.MeshLambertMaterial({ map: tex.crate }));
+      mesh.position.set(b.x, 1.1, b.z);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData.blockId = b.id;
+      scene.add(mesh);
+      raycastMeshes.push(mesh);
+      const box = new THREE.Box3(new THREE.Vector3(b.x - w / 2, 0, b.z - d / 2), new THREE.Vector3(b.x + w / 2, 2.2, b.z + d / 2));
+      colliders.push(box);
+      blockMeshes.set(b.id, { mesh, box });
+    },
+    removeBlock(id) {
+      const e = blockMeshes.get(id);
+      if (!e) return;
+      scene.remove(e.mesh);
+      const ci = colliders.indexOf(e.box), ri = raycastMeshes.indexOf(e.mesh);
+      if (ci >= 0) colliders.splice(ci, 1);
+      if (ri >= 0) raycastMeshes.splice(ri, 1);
+      blockMeshes.delete(id);
+    },
+  };
+  return world;
 }

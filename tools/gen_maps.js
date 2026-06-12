@@ -272,7 +272,70 @@ const village = {
   },
 };
 
-const maps = { arena, dust: dust, yard, village };
+// ================= rust_island (Phase 5 — rust mode) =================
+// Big 240x240 wilderness: scattered huts, forests (harvestable trees) and
+// rock outcrops (harvestable stone). resources: [type, x, z].
+function seededRand(seed) { let s = seed; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
+const rust_island = (() => {
+  const rnd = seededRand(1337);
+  const SZ = 240, HALF = SZ / 2 - 10;
+  const walls = [];
+  const crates = [];
+  const huts = [
+    [-70, -60, 9, 8], [60, -75, 10, 8], [85, 30, 9, 9], [-85, 45, 10, 8],
+    [0, 0, 12, 10], [-30, 80, 9, 8], [45, 85, 9, 8], [20, -30, 8, 8], [-45, -15, 9, 8],
+  ];
+  const taken = []; // [x, z, r] keep-out zones
+  for (const [hx, hz, hw, hd] of huts) {
+    walls.push(...house(hx, hz, hw, hd, 3.0, {
+      doors: [{ side: 'S' }, { side: 'N', off: hw > 9 ? 2 : 0 }],
+      windows: [{ side: 'E' }, { side: 'W' }],
+    }));
+    crates.push([hx + hw / 2 + 1.5, hz + 1, 1.6, 1]);
+    taken.push([hx, hz, Math.max(hw, hd) / 2 + 3]);
+  }
+  const spawnsT = [], spawnsCT = [];
+  for (let i = 0; i < 15; i++) {
+    spawnsT.push([-HALF + 6 + (i % 5) * 4, 0, HALF - 4 - Math.floor(i / 5) * 4]);
+    spawnsCT.push([HALF - 6 - (i % 5) * 4, 0, -HALF + 4 + Math.floor(i / 5) * 4]);
+  }
+  taken.push([-HALF + 14, HALF - 8, 16], [HALF - 14, -HALF + 8, 16]);
+  const resources = [];
+  const free = (x, z, r) => taken.every(([tx, tz, tr]) => (x - tx) ** 2 + (z - tz) ** 2 > (r + tr) ** 2)
+    && resources.every(([, rx, rz]) => (x - rx) ** 2 + (z - rz) ** 2 > 9);
+  // forest clusters
+  const groves = [[-60, 20], [-20, -70], [50, -20], [75, 75], [-80, -90], [90, -60], [-95, 85], [25, 50], [-15, 35], [60, 35]];
+  for (const [gx, gz] of groves) {
+    for (let i = 0; i < 14; i++) {
+      const x = +(gx + (rnd() - 0.5) * 36).toFixed(1), z = +(gz + (rnd() - 0.5) * 36).toFixed(1);
+      if (Math.abs(x) < HALF && Math.abs(z) < HALF && free(x, z, 1.2)) resources.push(['tree', x, z]);
+    }
+  }
+  // lone trees
+  for (let i = 0; i < 30; i++) {
+    const x = +((rnd() - 0.5) * 2 * HALF).toFixed(1), z = +((rnd() - 0.5) * 2 * HALF).toFixed(1);
+    if (free(x, z, 1.2)) resources.push(['tree', x, z]);
+  }
+  // rock outcrops
+  for (let i = 0; i < 42; i++) {
+    const x = +((rnd() - 0.5) * 2 * HALF).toFixed(1), z = +((rnd() - 0.5) * 2 * HALF).toFixed(1);
+    if (free(x, z, 1.6)) resources.push(['rock', x, z]);
+  }
+  return {
+    label: 'rust_island',
+    size: [SZ, SZ],
+    walls, lows: [], crates, platforms: [], sites: [],
+    resources,
+    spawns: { t: spawnsT, ct: spawnsCT },
+    palette: {
+      floor: '#7a9458', wall: '#9b8767', crate: '#8d6b40',
+      fog: '#c4d4ae', skyTop: [0.38, 0.58, 0.8], skyHor: [0.8, 0.86, 0.72],
+      hemiSky: '#d8ecff', hemiGround: '#7e9460', sun: '#fff4da',
+    },
+  };
+})();
+
+const maps = { arena, dust: dust, yard, village, rust_island };
 const out = path.join(__dirname, '..', 'public', 'maps.json');
 fs.writeFileSync(out, JSON.stringify(maps));
 console.log('wrote', out, Object.keys(maps).map((k) => `${k}(${maps[k].walls.length}w/${maps[k].crates.length}c)`).join(' '));
