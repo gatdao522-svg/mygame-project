@@ -107,7 +107,9 @@ class Avatar {
     if (!tpl) return;
     this.gunMesh = tpl.clone();
     this.gunMesh.scale.setScalar(0.55);
-    this.gunMesh.rotation.y = Math.PI;
+    // per-model yaw so the muzzle points forward (models have different native axes)
+    const tpYaw = { ak: -Math.PI / 2, pistol: Math.PI / 2, sniper: 0, knife: 0 }[key] ?? 0;
+    this.gunMesh.rotation.y = tpYaw;
     this.gunHolder.add(this.gunMesh);
   }
 

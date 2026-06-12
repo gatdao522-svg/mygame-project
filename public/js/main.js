@@ -348,7 +348,7 @@ function tick() {
   const maxSpeed = (player.crouch ? PLAYER.crouchSpeed : player.walk ? PLAYER.walkSpeed : PLAYER.runSpeed) * scopedMul;
 
   fwd.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-  right.set(fwd.z, 0, -fwd.x);
+  right.set(-fwd.z, 0, fwd.x);
   wish.set(0, 0, 0);
   if (!player.dead && isLocked() && !chatOpen) {
     if (keys.KeyW) wish.add(fwd);
@@ -423,7 +423,9 @@ function tick() {
       moveFactor: Math.min(1, hSpeed / 6) + (player.onGround ? 0 : 0.6),
     });
     const spreadPx = weapons._spread(Math.min(1, hSpeed / 6)) * 4200;
-    ui.setCrosshairGap(spreadPx, scoped || weapons.current === 'knife');
+    // hide crosshair while scoped, with knife, or with unscoped AWP (CS-style)
+    const hideCh = scoped || weapons.current === 'knife' || (weapons.cfg.zoom != null && !scoped);
+    ui.setCrosshairGap(Math.min(spreadPx, 60), hideCh);
   }
   effects.update(dt);
   remotes.update(dt, now);
@@ -449,3 +451,4 @@ window.__dbg = () => ({
 });
 import('./assets.js').then(m => { window.__assets = m.assets.chars; });
 window.__look = (yaw, pitch=0) => { player.yaw = yaw; player.pitch = pitch; };
+window.__w = () => weapons;
