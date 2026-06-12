@@ -17,7 +17,7 @@ if (!process.env.ADMIN_PASS) console.log(`[admin] generated password: ${ADMIN_PA
 // can spoof it and bypass per-IP limits and bans. Set TRUST_PROXY=0 for bare metal.
 const TRUST_PROXY = process.env.TRUST_PROXY !== '0';
 const MAX_PLAYERS = Math.max(2, parseInt(process.env.MAX_PLAYERS || '16', 10) || 16);
-const MAX_CONN_PER_IP = Math.max(1, parseInt(process.env.MAX_CONN_PER_IP || '3', 10) || 3);
+const MAX_CONN_PER_IP = Math.max(1, parseInt(process.env.MAX_CONN_PER_IP || '8', 10) || 8);
 
 const MAPS = JSON.parse(fs.readFileSync(path.join(__dirname, 'public', 'maps.json'), 'utf8'));
 const DATA_DIR = path.join(__dirname, 'data');
@@ -161,9 +161,9 @@ const ipConns = new Map(); // ip -> count
 const connAttempts = new Map(); // ip -> [timestamps] (rolling window)
 const tempBlocks = new Map();   // ip -> unblockAt
 const FLOOD_WINDOW_MS = 30000;
-const FLOOD_MAX_ATTEMPTS = 10;       // connects per window before temp block
+const FLOOD_MAX_ATTEMPTS = 30;       // connects per window before temp block
 const FLOOD_BLOCK_MS = 2 * 60000;    // temp block duration
-const JOIN_TIMEOUT_MS = 10000;       // connected sockets must join or get dropped
+const JOIN_TIMEOUT_MS = Math.max(1000, parseInt(process.env.JOIN_TIMEOUT_MS || '120000', 10) || 120000); // connected sockets must join or get dropped
 
 function floodCheck(ip) {
   const t = Date.now();

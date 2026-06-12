@@ -309,23 +309,57 @@ $('play').addEventListener('click', () => {
     });
   }
   if (!player.joined) {
-    net.join(name, selectedTeam === 'auto' ? null : selectedTeam, selectedSkin);
+    wantJoin = { name, team: selectedTeam === 'auto' ? null : selectedTeam, skin: selectedSkin };
+    if (net.socket.connected) {
+      net.join(wantJoin.name, wantJoin.team, wantJoin.skin);
+    } else {
+      $('loadStatus').textContent = 'Подключение к серверу…';
+      net.socket.connect();
+    }
   }
-  $('menu').classList.add('hidden');
-  $('hud').classList.remove('hidden');
+  // menu is hidden when `init` arrives — so a dead connection never leaves a black screen
   if (IS_TOUCH) $('mobile-ui').classList.remove('hidden');
   lockPointer();
+});
+
+// ---------- connection resilience ----------
+// The server drops idle/limited sockets (anti-bot); socket.io does NOT auto-reconnect
+// after a server-side disconnect. Without this, clicking PLAY on a dead socket
+// showed the HUD over an empty (black) world.
+let wantJoin = null; // join params if user clicked PLAY but `init` hasn't arrived yet
+net.socket.on('connect', () => {
+  if (player.joined) { location.reload(); return; } // mid-game reconnect: full resync
+  if (wantJoin) net.join(wantJoin.name, wantJoin.team, wantJoin.skin);
+});
+net.socket.on('disconnect', (reason) => {
+  if (net.manualClose) return;
+  if (player.joined) ui.banner('СВЯЗЬ ПОТЕРЯНА', 'Переподключение…', 0);
+  // 'io server disconnect' is final unless we manually reconnect
+  if (reason === 'io server disconnect') setTimeout(() => net.socket.connect(), 800);
+});
+net.socket.on('connect_error', (err) => {
+  const reasons = {
+    banned: 'Ты забанен на этом сервере',
+    'rate limited': 'Слишком частые подключения — подожди минуту',
+    'too many connections': 'Слишком много вкладок с игрой — закрой лишние',
+  };
+  const msg = reasons[err && err.message] || `Нет связи с сервером (${err && err.message})`;
+  $('loadStatus').textContent = `⛔ ${msg}`;
+  if (!player.joined) { $('menu').classList.remove('hidden'); $('hud').classList.add('hidden'); }
 });
 
 // ---------- network handlers ----------
 net.on('init', (d) => {
   net.id = d.id;
+  wantJoin = null;
   if (!world) {
     world = buildMap(scene, MAPS[d.map] || MAPS.arena);
     ui.initMinimap(world.mapData);
   }
   applyRustState(d.rust);
   player.joined = true;
+  $('menu').classList.add('hidden');
+  $('hud').classList.remove('hidden');
   applyRound(d.round);
   for (const p of d.players) if (p.id !== d.id) remotes.addOrUpdateInfo(p);
   applyYou(d.you);
@@ -484,11 +518,14 @@ net.on('harvested', (d) => {
 });
 net.on('map-change', () => { ui.banner('СМЕНА КАРТЫ', 'Перезагрузка…', 0); setTimeout(() => location.reload(), 1200); });
 net.on('join-fail', (d) => {
+  wantJoin = null;
   $('hud').classList.add('hidden');
   $('menu').classList.remove('hidden');
   $('loadStatus').textContent = `⛔ ${d.reason || 'Не удалось подключиться'}`;
 });
 net.on('kicked', (d) => {
+  wantJoin = null;
+  net.manualClose = true;
   document.exitPointerLock && document.exitPointerLock();
   $('hud').classList.add('hidden');
   $('menu').classList.remove('hidden');
