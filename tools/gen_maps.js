@@ -140,7 +140,139 @@ const yard = {
   },
 };
 
-const maps = { arena, dust: dust, yard };
+
+// ================= de_village (big map with enterable houses) =================
+// Walls support optional 6th element y0 (vertical offset) — used for door
+// lintels, window openings and roof slabs. Houses are fully enterable;
+// some roofs are reachable via exterior stairs (platforms).
+
+const T = 0.5; // house wall thickness
+/**
+ * Generates wall entries for an axis-aligned house with door/window openings
+ * and a walkable roof. side: 'N'(-z) 'S'(+z) 'W'(-x) 'E'(+x); off = offset
+ * along the wall from its center.
+ */
+function house(cx, cz, w, d, h, { doors = [], windows = [], parapet = false } = {}) {
+  const out = [];
+  const sideDef = {
+    N: { horiz: true, line: cz - (d - T) / 2, span: w },
+    S: { horiz: true, line: cz + (d - T) / 2, span: w },
+    W: { horiz: false, line: cx - (w - T) / 2, span: d },
+    E: { horiz: false, line: cx + (w - T) / 2, span: d },
+  };
+  const seg = (sd, segCenterOff, segLen, segH, y0 = 0) => {
+    if (segLen <= 0.05 || segH <= 0.05) return;
+    const c = sd.horiz ? cx + segCenterOff : cz + segCenterOff;
+    out.push(sd.horiz ? [c, sd.line, segLen, T, segH, y0] : [sd.line, c, T, segLen, segH, y0]);
+  };
+  for (const sideName of ['N', 'S', 'W', 'E']) {
+    const sd = sideDef[sideName];
+    const ops = [];
+    for (const dr of doors) if (dr.side === sideName) ops.push({ off: dr.off || 0, w: 1.9, kind: 'door' });
+    for (const wn of windows) if (wn.side === sideName) ops.push({ off: wn.off || 0, w: 1.7, kind: 'win' });
+    ops.sort((a, b) => a.off - b.off);
+    let cursor = -sd.span / 2;
+    for (const op of ops) {
+      const lo = op.off - op.w / 2, hi = op.off + op.w / 2;
+      seg(sd, (cursor + lo) / 2, lo - cursor, h); // full-height piece before opening
+      if (op.kind === 'door') {
+        seg(sd, op.off, op.w, h - 2.3, 2.3); // lintel
+      } else {
+        seg(sd, op.off, op.w, 1.0);          // sill (cover when crouched)
+        seg(sd, op.off, op.w, h - 2.1, 2.1); // lintel
+      }
+      cursor = hi;
+    }
+    seg(sd, (cursor + sd.span / 2) / 2, sd.span / 2 - cursor, h);
+  }
+  out.push([cx, cz, w, d, 0.35, h]); // walkable roof slab
+  if (parapet) { // parapet = array of sides (omit the side where stairs arrive)
+    const ph = 0.7, py = h + 0.35;
+    if (parapet.includes('N')) out.push([cx, cz - (d - T) / 2, w, T, ph, py]);
+    if (parapet.includes('S')) out.push([cx, cz + (d - T) / 2, w, T, ph, py]);
+    if (parapet.includes('W')) out.push([cx - (w - T) / 2, cz, T, d, ph, py]);
+    if (parapet.includes('E')) out.push([cx + (w - T) / 2, cz, T, d, ph, py]);
+  }
+  return out;
+}
+const mirrorWalls = (entries) => entries.map((e) => [-e[0], -e[1], ...e.slice(2)]);
+
+// Layout: 150x130. CT spawn north (-z), T spawn south (+z). 180° symmetric.
+// Central house-tunnel at mid, A site NE courtyard, B site SW courtyard.
+const vHousesHalf = [
+  // big site house next to A (roof reachable via stairs, overlooks the site)
+  ...house(38, -20, 14, 12, 5, {
+    doors: [{ side: 'W', off: 0 }, { side: 'S', off: -3 }],
+    windows: [{ side: 'N', off: -3 }, { side: 'N', off: 3 }, { side: 'E', off: 0 }],
+    parapet: ['N', 'S', 'W'],
+  }),
+  // long row house along mid street (east side)
+  ...house(14, -36, 12, 9, 4.5, {
+    doors: [{ side: 'S', off: 0 }, { side: 'W', off: 0 }],
+    windows: [{ side: 'N', off: 0 }, { side: 'E', off: 0 }],
+  }),
+  // small shed near CT side
+  ...house(-16, -44, 8, 7, 3.8, {
+    doors: [{ side: 'E', off: 0 }],
+    windows: [{ side: 'S', off: 0 }],
+  }),
+  // mid-west flank house
+  ...house(-34, -8, 10, 9, 4.2, {
+    doors: [{ side: 'N', off: 0 }, { side: 'E', off: 0 }],
+    windows: [{ side: 'S', off: 0 }, { side: 'W', off: 0 }],
+  }),
+];
+
+const village = {
+  label: 'de_village',
+  size: [150, 130],
+  walls: [
+    // perimeter
+    [0, -63.5, 148, 1, 9], [0, 63.5, 148, 1, 9],
+    [-73.5, 0, 1, 126, 9], [73.5, 0, 1, 126, 9],
+    // central house-tunnel (self-mirrored, sits exactly at center)
+    ...house(0, 0, 18, 11, 5, {
+      doors: [{ side: 'E', off: 0 }, { side: 'W', off: 0 }, { side: 'N', off: -5 }, { side: 'S', off: 5 }],
+      windows: [{ side: 'N', off: 4 }, { side: 'S', off: -4 }],
+    }),
+    ...vHousesHalf, ...mirrorWalls(vHousesHalf),
+    // lane walls shaping routes (mirrored)
+    ...expand([
+      [-12, -22, 26, 1, 5],   // wall north of B lane
+      [-52, -26, 1, 30, 6],   // west alley wall
+      [24, -8, 1, 16, 5],     // mid-east divider
+    ]),
+  ],
+  lows: expand([
+    [0, 18, 8, 0.5, 1.15],     // mid street cover
+    [-38, 22, 6, 0.5, 1.2],    // B approach cover
+    [-58, 0, 0.5, 8, 1.3],     // west alley cover
+    [30, -34, 6, 0.5, 1.15],   // A long cover
+    [12, -14, 0.5, 6, 1.2],
+  ]),
+  crates: expand([
+    [-38, 18, 1.8, 2], [-40.2, 16, 1.6, 1], [-36, 20.4, 1.6, 1], // B site stack
+    [-30, 28, 1.7, 1], [-46, 26, 1.6, 1],
+    [4, 26, 1.7, 1], [-4, 30, 1.6, 2],
+    [56, -10, 1.8, 1], [60, -14, 1.6, 1],
+    [20, -52, 1.7, 1], [14, -56, 1.6, 1],
+    [-62, -38, 1.8, 2],
+  ]),
+  // stairs up to the A house roof (and mirrored B side)
+  platforms: expandPlat([[47.3, -20, 5, 6, 4.9, 'E']]),
+  sites: [['A', 38, -32], ['B', -38, 32]],
+  spawns: {
+    t: [[-8, 0, 54], [-4, 0, 57], [0, 0, 54], [4, 0, 57], [8, 0, 54], [-12, 0, 57], [12, 0, 57], [0, 0, 59]],
+    ct: [[8, 0, -54], [4, 0, -57], [0, 0, -54], [-4, 0, -57], [-8, 0, -54], [12, 0, -57], [-12, 0, -57], [0, 0, -59]],
+  },
+  palette: {
+    floor: '#a8a27e', wall: '#c7b294', crate: '#8d6b40',
+    fog: '#d3c9ae', skyTop: [0.34, 0.52, 0.78], skyHor: [0.86, 0.81, 0.69],
+    hemiSky: '#d6e6ff', hemiGround: '#a59873', sun: '#fff0d2',
+  },
+};
+
+const maps = { arena, dust: dust, yard, village };
 const out = path.join(__dirname, '..', 'public', 'maps.json');
 fs.writeFileSync(out, JSON.stringify(maps));
 console.log('wrote', out, Object.keys(maps).map((k) => `${k}(${maps[k].walls.length}w/${maps[k].crates.length}c)`).join(' '));

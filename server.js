@@ -45,14 +45,14 @@ function saveBans() {
 function buildColliders(map) {
   const out = [];
   const add = (cx, cy, cz, w, h, d) => out.push([cx - w / 2, cy - h / 2, cz - d / 2, cx + w / 2, cy + h / 2, cz + d / 2]);
-  for (const [cx, cz, w, d, h] of map.walls) add(cx, h / 2, cz, w, h, d);
+  for (const [cx, cz, w, d, h, y0 = 0] of map.walls) add(cx, y0 + h / 2, cz, w, h, d);
   for (const [cx, cz, w, d, h] of map.lows) add(cx, h / 2, cz, w, h, d);
   for (const [cx, cz, size, stack] of map.crates) {
     for (let s = 0; s < stack; s++) add(cx, size / 2 + s * size, cz, size + 0.1, size, size + 0.1);
   }
   for (const [cx, cz, w, d, h, stairDir] of map.platforms) {
     add(cx, h / 2, cz, w, h, d);
-    const steps = 4, stepH = h / steps, stepD = 0.9;
+    const steps = Math.max(4, Math.ceil(h / 0.5)), stepH = h / steps, stepD = 0.9;
     for (let i = 0; i < steps; i++) {
       const sh = h - i * stepH;
       const offset = (w / 2) + stepD / 2 + i * stepD;
