@@ -12,6 +12,13 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_PASS = process.env.ADMIN_PASS || crypto.randomBytes(9).toString('base64url');
 if (!process.env.ADMIN_PASS) console.log(`[admin] generated password: ${ADMIN_PASS}`);
 
+// Behind a reverse proxy (Railway etc.) the real client IP is the LAST entry of
+// x-forwarded-for added by the trusted proxy. Never trust the first entry — bots
+// can spoof it and bypass per-IP limits and bans. Set TRUST_PROXY=0 for bare metal.
+const TRUST_PROXY = process.env.TRUST_PROXY !== '0';
+const MAX_PLAYERS = Math.max(2, parseInt(process.env.MAX_PLAYERS || '16', 10) || 16);
+const MAX_CONN_PER_IP = Math.max(1, parseInt(process.env.MAX_CONN_PER_IP || '3', 10) || 3);
+
 const MAPS = JSON.parse(fs.readFileSync(path.join(__dirname, 'public', 'maps.json'), 'utf8'));
 const DATA_DIR = path.join(__dirname, 'data');
 const BANS_FILE = path.join(DATA_DIR, 'bans.json');
@@ -83,6 +90,38 @@ let mapId = 'arena';
 let colliders = buildColliders(MAPS[mapId]);
 const players = new Map(); // socket.id -> player
 const ipConns = new Map(); // ip -> count
+
+// ---------- anti bot-flood ----------
+const connAttempts = new Map(); // ip -> [timestamps] (rolling window)
+const tempBlocks = new Map();   // ip -> unblockAt
+const FLOOD_WINDOW_MS = 30000;
+const FLOOD_MAX_ATTEMPTS = 10;       // connects per window before temp block
+const FLOOD_BLOCK_MS = 2 * 60000;    // temp block duration
+const JOIN_TIMEOUT_MS = 10000;       // connected sockets must join or get dropped
+
+function floodCheck(ip) {
+  const t = Date.now();
+  const ub = tempBlocks.get(ip);
+  if (ub) {
+    if (t < ub) return false;
+    tempBlocks.delete(ip);
+  }
+  let arr = connAttempts.get(ip);
+  if (!arr) { arr = []; connAttempts.set(ip, arr); }
+  while (arr.length && t - arr[0] > FLOOD_WINDOW_MS) arr.shift();
+  arr.push(t);
+  if (arr.length > FLOOD_MAX_ATTEMPTS) {
+    tempBlocks.set(ip, t + FLOOD_BLOCK_MS);
+    slog('anticheat', `temp-block ${ip} — connection flood (${arr.length} in 30s)`);
+    return false;
+  }
+  return true;
+}
+setInterval(() => { // GC stale flood entries
+  const t = Date.now();
+  for (const [ip, arr] of connAttempts) if (!arr.length || t - arr[arr.length - 1] > FLOOD_WINDOW_MS) connAttempts.delete(ip);
+  for (const [ip, ub] of tempBlocks) if (t > ub) tempBlocks.delete(ip);
+}, 60000);
 
 const round = {
   phase: 'warmup', // warmup | freeze | live | end | matchend
@@ -413,12 +452,21 @@ function changeMap(id) {
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 4096, pingTimeout: 20000 });
 
+function realIp(socket) {
+  if (TRUST_PROXY) {
+    const xff = String(socket.handshake.headers['x-forwarded-for'] || '');
+    const parts = xff.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1]; // last hop = added by trusted proxy
+  }
+  return socket.handshake.address || '?';
+}
+
 io.use((socket, next) => {
-  const ip = (socket.handshake.headers['x-forwarded-for'] || '').split(',')[0].trim()
-    || socket.handshake.address || '?';
+  const ip = realIp(socket);
   socket.data.ip = ip;
   if (bans[ip]) return next(new Error('banned'));
-  if ((ipConns.get(ip) || 0) >= 4) return next(new Error('too many connections'));
+  if (!floodCheck(ip)) return next(new Error('rate limited'));
+  if ((ipConns.get(ip) || 0) >= MAX_CONN_PER_IP) return next(new Error('too many connections'));
   next();
 });
 
@@ -427,9 +475,20 @@ io.on('connection', (socket) => {
   ipConns.set(ip, (ipConns.get(ip) || 0) + 1);
   let joined = false;
 
+  // drop zombie sockets that connect but never join (bot floods)
+  const joinTimer = setTimeout(() => {
+    if (!joined) { slog('anticheat', `drop idle socket ${ip} (no join in ${JOIN_TIMEOUT_MS / 1000}s)`); socket.disconnect(true); }
+  }, JOIN_TIMEOUT_MS);
+
   socket.on('join', (data) => {
     if (joined || typeof data !== 'object' || !data) return;
+    if (players.size >= MAX_PLAYERS) {
+      socket.emit('join-fail', { reason: `Сервер полон (${MAX_PLAYERS} игроков)` });
+      socket.disconnect(true);
+      return;
+    }
     joined = true;
+    clearTimeout(joinTimer);
     let name = String(data.name || '').replace(/[<>\n\r\t]/g, '').trim().slice(0, 16) || `Игрок${Math.floor(Math.random() * 900) + 100}`;
     let team = data.team === 't' || data.team === 'ct' ? data.team : null;
     if (!team) { const c = teamCounts(); team = c.t <= c.ct ? 't' : 'ct'; }
@@ -445,6 +504,7 @@ io.on('connection', (socket) => {
       reloadUntil: 0, reloadingWeapon: null,
       lastShotAt: {}, protectedUntil: now() + CFG.ROUND.spawnProtectMs,
       respawnAt: 0, muted: false,
+      posHist: [], // [{t, pos, crouch}] for lag-compensated hit validation
       flags: {}, flagsTotal: 0,
       stateBudget: 40, stateBudgetAt: now(),
       lastChatAt: 0, lastStateT: now(),
@@ -501,6 +561,8 @@ io.on('connection', (socket) => {
     if (dist > maxDist) { flag(p, 'speed'); } // soft flag, accept small overage
 
     p.pos = [x, y, z];
+    p.posHist.push({ t, pos: [x, y, z], crouch: !!s.crouch });
+    while (p.posHist.length && t - p.posHist[0].t > 600) p.posHist.shift();
     p.yaw = Number(s.yaw) || 0;
     p.pitch = Number(s.pitch) || 0;
     p.anim = typeof s.anim === 'string' ? s.anim.slice(0, 10) : 'idle';
@@ -547,25 +609,57 @@ io.on('connection', (socket) => {
     } else if (hits.length > 1) { flag(p, 'multi-hit'); hits = hits.slice(0, 1); }
 
     const eye = [p.pos[0], p.pos[1] + (p.crouch ? CFG.PLAYER.eyeCrouch : CFG.PLAYER.eyeStand), p.pos[2]];
+    // lag compensation: the shooter aimed at where the victim was ~INTERP_DELAY + jitter
+    // ago, so validate against the victim's recent position history, not just "now".
+    const REWIND_MS = 200, REWIND_MAX_MS = 450;
+    function rewindStates(victim) {
+      const out = [{ pos: victim.pos, crouch: victim.crouch }];
+      let best = null;
+      for (const hsnap of victim.posHist) {
+        const age = t - hsnap.t;
+        if (age > REWIND_MAX_MS) continue;
+        if (!best || Math.abs(age - REWIND_MS) < Math.abs(t - best.t - REWIND_MS)) best = hsnap;
+      }
+      if (best && best.pos !== victim.pos) out.push({ pos: best.pos, crouch: best.crouch });
+      return out;
+    }
+    function bodyPoints(pos, crouch) {
+      const headY = crouch ? 1.11 : 1.66, chestY = crouch ? 0.78 : 1.2;
+      return {
+        head: [pos[0], pos[1] + headY, pos[2]],
+        chest: [pos[0], pos[1] + chestY, pos[2]],
+        pelvis: [pos[0], pos[1] + 0.55, pos[2]],
+      };
+    }
     for (const h of hits) {
       if (typeof h !== 'object' || !h) continue;
       const victim = players.get(String(h.id || ''));
       if (!victim || !victim.alive || victim.id === p.id) continue;
       if (victim.team === p.team) { flag(p, 'team-dmg'); continue; }
       if (t < victim.protectedUntil) { socket.emit('hit-protected', { id: victim.id }); continue; }
-      // distance
-      const dx = victim.pos[0] - p.pos[0], dy = victim.pos[1] - p.pos[1], dz = victim.pos[2] - p.pos[2];
-      const dist = Math.hypot(dx, dy, dz);
-      if (dist > w.range * 1.2) { flag(p, 'range'); continue; }
-      // LOS to chest and head
-      const chest = [victim.pos[0], victim.pos[1] + 1.2, victim.pos[2]];
-      const head = [victim.pos[0], victim.pos[1] + 1.66, victim.pos[2]];
-      if (losBlocked(colliders, eye, chest) && losBlocked(colliders, eye, head)) { flag(p, 'wallhack'); continue; }
+      // validate distance + LOS against current AND rewound position; accept if either passes
+      let dist = Infinity, valid = false;
+      for (const st of rewindStates(victim)) {
+        const dx = st.pos[0] - p.pos[0], dy = st.pos[1] - p.pos[1], dz = st.pos[2] - p.pos[2];
+        const d = Math.hypot(dx, dy, dz);
+        if (d > w.range * 1.2) continue;
+        const pts = bodyPoints(st.pos, st.crouch);
+        if (losBlocked(colliders, eye, pts.chest) && losBlocked(colliders, eye, pts.head) && losBlocked(colliders, eye, pts.pelvis)) continue;
+        valid = true;
+        dist = Math.min(dist, d);
+      }
+      if (!valid) {
+        // distinguish flags for the admin log
+        const dNow = Math.hypot(victim.pos[0] - p.pos[0], victim.pos[1] - p.pos[1], victim.pos[2] - p.pos[2]);
+        flag(p, dNow > w.range * 1.2 ? 'range' : 'wallhack');
+        continue;
+      }
 
-      const zone = h.zone === 'head' ? 'head' : 'body';
+      const zone = h.zone === 'head' ? 'head' : (h.zone === 'legs' ? 'legs' : 'body');
       const pelletN = w.pellets ? Math.max(1, Math.min(8, Number(h.pellets) || 1)) : 1;
       let dmg = w.dmg * pelletN;
       if (zone === 'head') dmg *= (w.headMul || 2);
+      else if (zone === 'legs') dmg *= 0.75;
       // distance falloff beyond 60% of range
       if (dist > w.range * 0.6 && w.range < 400) dmg *= Math.max(0.55, 1 - (dist - w.range * 0.6) / w.range);
       dmg = Math.round(dmg);
@@ -655,6 +749,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    clearTimeout(joinTimer);
     ipConns.set(ip, Math.max(0, (ipConns.get(ip) || 1) - 1));
     const p = players.get(socket.id);
     if (p) {

@@ -61,13 +61,15 @@ class Avatar {
       this.group.add(body);
     }
 
-    // hitboxes (invisible, raycast targets)
+    // hitboxes (invisible, raycast targets) — CS-style: head / torso / legs
     const hbMat = new THREE.MeshBasicMaterial({ visible: false });
-    this.headHB = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), hbMat);
+    this.headHB = new THREE.Mesh(new THREE.SphereGeometry(0.21, 8, 6), hbMat);
     this.headHB.userData = { playerId: this.id, zone: 'head' };
-    this.bodyHB = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.35, 0.55), hbMat);
+    this.bodyHB = new THREE.Mesh(new THREE.BoxGeometry(0.72, 1, 0.5), hbMat);
     this.bodyHB.userData = { playerId: this.id, zone: 'body' };
-    this.group.add(this.headHB, this.bodyHB);
+    this.legsHB = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1, 0.45), hbMat);
+    this.legsHB.userData = { playerId: this.id, zone: 'legs' };
+    this.group.add(this.headHB, this.bodyHB, this.legsHB);
     this._poseHitboxes(false);
 
     this.nameTag = makeNameSprite(info.name, info.team);
@@ -129,10 +131,16 @@ class Avatar {
   }
 
   _poseHitboxes(crouch) {
+    // must stay in sync with server bodyPoints(): head 1.66/1.11, chest 1.2/0.78
     const h = crouch ? 1.25 : 1.8;
-    this.headHB.position.set(0, h - 0.14, 0);
-    this.bodyHB.position.set(0, (h - 0.3) / 2, 0);
-    this.bodyHB.scale.y = crouch ? 0.72 : 1;
+    this.headHB.position.set(0, crouch ? 1.11 : 1.66, 0);
+    // torso: from hip (~0.45h) to neck
+    const torsoTop = h - 0.32, torsoBot = h * 0.42;
+    this.bodyHB.scale.y = torsoTop - torsoBot;
+    this.bodyHB.position.set(0, (torsoTop + torsoBot) / 2, 0);
+    // legs: ground to hip
+    this.legsHB.scale.y = torsoBot;
+    this.legsHB.position.set(0, torsoBot / 2, 0);
   }
 
   _play(name, fade = 0.18, once = false) {
@@ -161,6 +169,7 @@ class Avatar {
     this._play('Death', 0.1, true);
     this.headHB.userData.playerId = null;
     this.bodyHB.userData.playerId = null;
+    this.legsHB.userData.playerId = null;
     this.protMesh.visible = false;
   }
 
@@ -170,6 +179,7 @@ class Avatar {
     if (Array.isArray(pos)) this.group.position.set(pos[0], pos[1], pos[2]);
     this.headHB.userData.playerId = this.id;
     this.bodyHB.userData.playerId = this.id;
+    this.legsHB.userData.playerId = this.id;
     this._play('Idle', 0.05);
   }
 
@@ -238,7 +248,7 @@ export class RemotePlayers {
   hitboxes() {
     const out = [];
     for (const a of this.map.values()) {
-      if (a.alive) { out.push(a.headHB, a.bodyHB); }
+      if (a.alive) { out.push(a.headHB, a.bodyHB, a.legsHB); }
     }
     return out;
   }

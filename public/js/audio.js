@@ -1,5 +1,20 @@
-// ===== Procedural WebAudio sound engine (no asset files) =====
+// ===== WebAudio sound engine: real gunshot samples + procedural fallback =====
+// Gunshots: CC0 recordings from "The Free Firearm Sound Library" (freefirearmsfx.com,
+// via OpenGameArt). Everything else stays procedural (tiny, no asset needed).
 let ctx = null, master = null;
+
+const sampleBuffers = {}; // weaponId -> AudioBuffer
+const SAMPLE_IDS = ['ak47', 'm4', 'mp5', 'shotgun', 'deagle', 'pistol', 'awp'];
+
+function preloadSamples() {
+  for (const id of SAMPLE_IDS) {
+    fetch(`assets/sfx/${id}.ogg`)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status))))
+      .then((ab) => ctx.decodeAudioData(ab))
+      .then((buf) => { sampleBuffers[id] = buf; })
+      .catch(() => {}); // missing/failed file -> procedural fallback keeps working
+  }
+}
 
 export function initAudio() {
   if (ctx) return;
@@ -7,6 +22,7 @@ export function initAudio() {
   master = ctx.createGain();
   master.gain.value = 0.5;
   master.connect(ctx.destination);
+  preloadSamples();
 }
 export function resumeAudio() { if (ctx && ctx.state === 'suspended') ctx.resume(); }
 
@@ -28,6 +44,21 @@ function env(g, t0, peak, dur) {
 export function playGunshot(weapon, vol = 1) {
   if (!ctx) return;
   const t = ctx.currentTime;
+
+  // real recorded sample if loaded (knife stays procedural)
+  const buf = sampleBuffers[weapon];
+  if (buf) {
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 0.97 + Math.random() * 0.06; // slight variation per shot
+    const g = ctx.createGain();
+    const peak = { mp5: 0.55, pistol: 0.55, m4: 0.62, ak47: 0.68, shotgun: 0.8, deagle: 0.75, awp: 0.9 }[weapon] ?? 0.65;
+    g.gain.value = peak * vol;
+    src.connect(g).connect(master);
+    src.start(t);
+    return;
+  }
+
   const p = {
     ak47:    { dur: 0.22, freq: 900, boom: 110, peak: 0.9 },
     m4:      { dur: 0.2, freq: 1100, boom: 130, peak: 0.85 },
