@@ -153,12 +153,54 @@ document.addEventListener('mousemove', (e) => {
 });
 
 function isLocked() { return IS_TOUCH || document.pointerLockElement === canvas; }
+
+// --- pointer lock with pause overlay + cooldown handling ---
+// Browsers reject requestPointerLock() for ~1.3s after Esc-exit and after
+// tab switches the user gesture is gone — so we show a "click to resume"
+// overlay and retry on failure instead of silently doing nothing.
+let lockRetryT = null;
+function showResume(show) {
+  $('resume').classList.toggle('hidden', !show);
+  if (!show) $('resume-note').classList.add('hidden');
+}
+function lockPointer() {
+  if (IS_TOUCH) return;
+  clearTimeout(lockRetryT);
+  let p;
+  try { p = canvas.requestPointerLock(); } catch { p = null; }
+  if (p && p.catch) {
+    p.then(() => showResume(false)).catch(() => {
+      // cooldown after Esc — auto-retry while the user gesture is still "fresh"
+      $('resume-note').classList.remove('hidden');
+      lockRetryT = setTimeout(() => { try { canvas.requestPointerLock(); } catch {} }, 1350);
+    });
+  }
+}
 document.addEventListener('pointerlockchange', () => {
-  if (!document.pointerLockElement && player.joined && !chatOpen && !ui.isBuyOpen() && !IS_TOUCH) {
-    $('menu').classList.remove('hidden');
+  if (IS_TOUCH) return;
+  if (document.pointerLockElement === canvas) { showResume(false); return; }
+  if (player.joined && !chatOpen && !ui.isBuyOpen()) showResume(true);
+});
+// any click while paused (or on the bare canvas) re-captures the mouse
+$('resume').addEventListener('click', (e) => {
+  if (e.target.id === 'resume-menu-btn') return;
+  lockPointer();
+});
+$('resume-menu-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  showResume(false);
+  $('menu').classList.remove('hidden');
+});
+canvas.addEventListener('click', () => {
+  const menuHidden = $('menu').classList.contains('hidden');
+  if (player.joined && !isLocked() && !chatOpen && !ui.isBuyOpen() && menuHidden) lockPointer();
+});
+// returning to the tab: prompt to resume
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && player.joined && !isLocked() && !IS_TOUCH && !chatOpen && !ui.isBuyOpen() && $('menu').classList.contains('hidden')) {
+    showResume(true);
   }
 });
-function lockPointer() { if (!IS_TOUCH) canvas.requestPointerLock(); }
 
 // ---------- buy menu ----------
 ui.initBuyMenu((wid) => net.sendBuy(wid));
@@ -394,6 +436,11 @@ net.on('chat', (c) => ui.addChat(c.name, c.team, c.text));
 net.on('server-msg', (m) => ui.addChat(null, null, m.text));
 net.on('reloading', () => {});
 net.on('map-change', () => { ui.banner('СМЕНА КАРТЫ', 'Перезагрузка…', 0); setTimeout(() => location.reload(), 1200); });
+net.on('join-fail', (d) => {
+  $('hud').classList.add('hidden');
+  $('menu').classList.remove('hidden');
+  $('loadStatus').textContent = `⛔ ${d.reason || 'Не удалось подключиться'}`;
+});
 net.on('kicked', (d) => {
   document.exitPointerLock && document.exitPointerLock();
   $('hud').classList.add('hidden');

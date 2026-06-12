@@ -269,10 +269,12 @@ export class WeaponSystem {
       if (hit) {
         const pid = hit.object.userData.playerId;
         if (pid) {
-          const zone = hit.object.userData.zone === 'head' ? 'head' : 'body';
-          const v = victims.get(pid) || { zone: 'body', pellets: 0 };
+          const zone = hit.object.userData.zone || 'body';
+          const v = victims.get(pid) || { zone, pellets: 0 };
           v.pellets++;
-          if (zone === 'head') v.zone = 'head';
+          // zone priority: head > body > legs
+          const rank = { head: 2, body: 1, legs: 0 };
+          if ((rank[zone] ?? 1) > (rank[v.zone] ?? 1)) v.zone = zone;
           victims.set(pid, v);
           effects.impact(hit.point, hit.face ? hit.face.normal : null, true);
         } else {
