@@ -144,9 +144,9 @@ export function buildMap(scene, map) {
   // --- merged static groups by material ---
   const groups = { wall: [], crate: [], concrete: [], metal: [] };
 
-  for (const [cx, cz, w, d, h] of walls) {
-    const g = boxGeo(w, h, d); g.translate(cx, h / 2, cz);
-    groups.wall.push(g); addCollider(cx, h / 2, cz, w, h, d);
+  for (const [cx, cz, w, d, h, y0 = 0] of walls) {
+    const g = boxGeo(w, h, d); g.translate(cx, y0 + h / 2, cz);
+    groups.wall.push(g); addCollider(cx, y0 + h / 2, cz, w, h, d);
   }
   for (const [cx, cz, w, d, h] of lows) {
     const g = boxGeo(w, h, d, 0.6); g.translate(cx, h / 2, cz);
@@ -166,7 +166,7 @@ export function buildMap(scene, map) {
   for (const [cx, cz, w, d, h, stairDir] of platforms) {
     const g = boxGeo(w, h, d, 0.5); g.translate(cx, h / 2, cz);
     groups.concrete.push(g); addCollider(cx, h / 2, cz, w, h, d);
-    const steps = 4, stepH = h / steps, stepD = 0.9;
+    const steps = Math.max(4, Math.ceil(h / 0.5)), stepH = h / steps, stepD = 0.9;
     for (let i = 0; i < steps; i++) {
       const sh = h - i * stepH;
       const offset = (w / 2) + stepD / 2 + i * stepD;
