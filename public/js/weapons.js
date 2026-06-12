@@ -99,9 +99,34 @@ export class WeaponSystem {
     this.vm.rotation.set(...cfg.vmRot);
     applySkin(this.vm, this.deps.skin ? this.deps.skin() : 'default');
     this.holder.add(this.vm);
-    // first-person arms
+    // first-person arms — anchor hands to the actual gun model's grips
     if (this.arms) this.holder.remove(this.arms);
-    this.arms = makeArms(this.deps.team ? this.deps.team() : 't', poseForWeapon(cfg));
+    const pose = poseForWeapon(cfg);
+    let grips = null;
+    try {
+      this.holder.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(this.vm);
+      if (!bb.isEmpty()) {
+        bb.applyMatrix4(new THREE.Matrix4().copy(this.holder.matrixWorld).invert());
+        const len = Math.max(0.001, bb.max.z - bb.min.z);
+        const ht = Math.max(0.001, bb.max.y - bb.min.y);
+        const midX = (bb.min.x + bb.max.x) / 2;
+        if (pose === 'rifle') {
+          grips = {
+            rear: new THREE.Vector3(midX, bb.min.y + ht * 0.18, bb.max.z - len * 0.30),
+            fore: new THREE.Vector3(midX, bb.min.y + ht * 0.22, bb.min.z + len * 0.30),
+          };
+        } else if (pose === 'pistol') {
+          grips = {
+            rear: new THREE.Vector3(midX, bb.min.y + ht * 0.10, bb.max.z - len * 0.18),
+            fore: new THREE.Vector3(midX - 0.04, bb.min.y + ht * 0.04, bb.max.z - len * 0.14),
+          };
+        } else { // knife: fist on the handle (rear-bottom quarter of the bbox)
+          grips = { rear: new THREE.Vector3(midX, bb.min.y + ht * 0.35, bb.max.z - len * 0.22) };
+        }
+      }
+    } catch (e) { /* fall back to default anchors */ }
+    this.arms = makeArms(this.deps.team ? this.deps.team() : 't', pose, grips);
     this.arms.traverse((o) => { o.userData.isArms = true; });
     this.holder.add(this.arms);
   }

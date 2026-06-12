@@ -93,10 +93,10 @@ function arm(shoulder, wrist, mats, side, pose) {
 
   const hand = makeHand(gloveMat, skinMat, padMat, side, pose === 'knife' ? 1.15 : 0.85);
   hand.position.copy(wrist);
-  // orient the hand: fingers along the grip (gun forward is -Z in holder space)
-  const aim = wrist.clone().sub(shoulder).normalize();
-  hand.quaternion.setFromUnitVectors(FWD, aim.lerp(FWD, pose === 'rifle' ? 0.55 : 0.35).normalize());
-  hand.rotateZ(side * (pose === 'pistol' ? 0.25 : 0.45)); // wrap around the grip
+  // orient the hand as a continuation of the forearm so wrist/cuff stay connected
+  const foreDir = wrist.clone().sub(elbow).normalize();
+  hand.quaternion.setFromUnitVectors(FWD, foreDir.lerp(FWD, 0.25).normalize());
+  hand.rotateZ(side * (pose === 'pistol' ? 0.3 : 0.5)); // wrap around the grip
   g.add(hand);
   return g;
 }
@@ -106,7 +106,7 @@ function arm(shoulder, wrist, mats, side, pose) {
  * Holder space: gun at origin, -Z is forward (muzzle), camera roughly at (-0.28, 0.26, 0.55).
  * pose: 'rifle' | 'pistol' | 'knife'
  */
-export function makeArms(team, pose = 'rifle') {
+export function makeArms(team, pose = 'rifle', grips = null) {
   const g = new THREE.Group();
   const mats = {
     sleeveMat: new THREE.MeshLambertMaterial({ color: team === 't' ? 0x5a4a30 : 0x2e3f54 }),
@@ -118,14 +118,19 @@ export function makeArms(team, pose = 'rifle') {
 
   if (pose === 'rifle') {
     // right hand on the rear grip, left hand on the foregrip
-    g.add(arm(V(0.12, -0.6, 0.62), V(0.015, -0.07, 0.1), mats, 1, pose));
-    g.add(arm(V(-0.4, -0.58, 0.52), V(-0.015, -0.06, -0.22), mats, -1, pose));
+    const rear = grips?.rear || V(0.015, -0.07, 0.1);
+    const fore = grips?.fore || V(-0.015, -0.06, -0.22);
+    g.add(arm(V(0.12, -0.6, 0.62), rear, mats, 1, pose));
+    g.add(arm(V(-0.4, -0.58, 0.52), fore, mats, -1, pose));
   } else if (pose === 'pistol') {
     // two-handed pistol grip, support hand cups the firing hand
-    g.add(arm(V(0.14, -0.6, 0.62), V(0.02, -0.09, 0.06), mats, 1, pose));
-    g.add(arm(V(-0.32, -0.62, 0.56), V(-0.03, -0.105, 0.085), mats, -1, pose));
+    const rear = grips?.rear || V(0.02, -0.09, 0.06);
+    const fore = grips?.fore || rear.clone().add(V(-0.045, -0.012, 0.02));
+    g.add(arm(V(0.14, -0.6, 0.62), rear, mats, 1, pose));
+    g.add(arm(V(-0.32, -0.62, 0.56), fore, mats, -1, pose));
   } else { // knife — right arm only, tight fist
-    g.add(arm(V(0.14, -0.6, 0.62), V(0.01, -0.06, 0.08), mats, 1, pose));
+    const rear = grips?.rear || V(0.01, -0.06, 0.08);
+    g.add(arm(V(0.14, -0.6, 0.62), rear, mats, 1, pose));
   }
   return g;
 }
