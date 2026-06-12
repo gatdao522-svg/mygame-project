@@ -548,6 +548,9 @@ function netSend(dt, speed) {
 const clock = new THREE.Clock();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3(), wish = new THREE.Vector3();
 let stepAcc = 0;
+let smoothEye = PLAYER.eyeStand; // smoothed eye height (crouch transitions)
+let landDip = 0;                 // camera dip after hard landings
+let bobPhase = 0;                // run view-bob phase
 
 function tick() {
   requestAnimationFrame(tick);
@@ -576,18 +579,23 @@ function tick() {
   }
   if (wish.lengthSq() > 1) wish.normalize();
 
-  const accel = player.onGround ? PLAYER.accelGround : PLAYER.accelAir;
-  player.vel.x += wish.x * accel * dt;
-  player.vel.z += wish.z * accel * dt;
   if (player.onGround) {
+    player.vel.x += wish.x * PLAYER.accelGround * dt;
+    player.vel.z += wish.z * PLAYER.accelGround * dt;
     const f = Math.max(0, 1 - PLAYER.friction * dt);
     if (wish.lengthSq() === 0) { player.vel.x *= f; player.vel.z *= f; }
+    const hs = Math.hypot(player.vel.x, player.vel.z);
+    if (hs > maxSpeed) { const k = maxSpeed / hs; player.vel.x *= k; player.vel.z *= k; }
+  } else {
+    // CS/Quake-style air accel: only limit speed along the wish direction, so
+    // momentum is preserved and air-strafing feels right instead of velocity
+    // getting hard-clamped mid-jump.
+    const cur = player.vel.x * wish.x + player.vel.z * wish.z;
+    const add = Math.min(Math.max(0, maxSpeed * 0.9 - cur), PLAYER.accelAir * maxSpeed * dt);
+    player.vel.x += wish.x * add;
+    player.vel.z += wish.z * add;
   }
   const hSpeed = Math.hypot(player.vel.x, player.vel.z);
-  if (hSpeed > maxSpeed) {
-    const k = maxSpeed / hSpeed;
-    player.vel.x *= k; player.vel.z *= k;
-  }
 
   if (canMove && player.onGround && keys.Space) {
     player.vel.y = PLAYER.jumpVel;
@@ -598,8 +606,13 @@ function tick() {
 
   moveAxis(player.pos, h, 'x', player.vel.x * dt);
   moveAxis(player.pos, h, 'z', player.vel.z * dt);
+  const fallSpeed = -player.vel.y;
   const dy = moveAxis(player.pos, h, 'y', player.vel.y * dt);
   if (player.vel.y < 0 && (dy > player.vel.y * dt + 1e-9 || dy === 0)) {
+    if (!player.onGround && fallSpeed > 4.5) { // landing impact: camera dip + thud
+      landDip = Math.min(0.16, (fallSpeed - 4.5) * 0.022);
+      audio.playFootstep(Math.min(0.16, 0.06 + fallSpeed * 0.012));
+    }
     player.onGround = true; player.vel.y = 0;
   } else if (player.vel.y > 0 && dy === 0) {
     player.vel.y = 0;
@@ -614,7 +627,14 @@ function tick() {
   }
 
   // --- camera ---
-  const eyeH = player.crouch ? PLAYER.eyeCrouch : PLAYER.eyeStand;
+  // smooth crouch transition + landing dip + subtle run bob (CS feel)
+  const targetEye = player.crouch ? PLAYER.eyeCrouch : PLAYER.eyeStand;
+  smoothEye += (targetEye - smoothEye) * Math.min(1, dt * 14);
+  landDip = Math.max(0, landDip - dt * 0.55);
+  if (player.onGround && hSpeed > 1.5) bobPhase += dt * hSpeed * 1.8;
+  const bobAmp = player.onGround ? Math.min(1, hSpeed / PLAYER.runSpeed) * 0.018 : 0;
+  const bobY = Math.abs(Math.sin(bobPhase)) * bobAmp;
+  const eyeH = smoothEye - landDip + bobY;
   const rc = weapons ? weapons.getRecoil() : { pitch: 0, yaw: 0 };
   camera.position.set(player.pos.x, player.pos.y + eyeH, player.pos.z);
   camera.rotation.set(0, 0, 0);
@@ -652,7 +672,7 @@ function tick() {
     ui.setCrosshairGap(Math.min(spreadPx, 60), hideCh);
   }
   effects.update(dt);
-  remotes.update(dt, nowMs);
+  remotes.update(dt, nowMs, camera.position);
   netSend(dt, hSpeed);
   if (world) ui.drawMinimap({ x: player.pos.x, z: player.pos.z, yaw: player.yaw }, remotes.map, player.team);
   ui.tickFPS(dt);
@@ -664,8 +684,29 @@ function tick() {
     renderer.clearDepth();
     renderer.render(vmScene, vmCamera);
   }
+
+  adaptResolution(dt);
 }
 tick();
+
+// ---------- adaptive resolution: keep frame rate up on weak GPUs ----------
+const PR_MAX = Math.min(devicePixelRatio, IS_TOUCH ? 1.25 : 1.75);
+const PR_MIN = Math.min(devicePixelRatio, 0.75);
+let prCurrent = PR_MAX, fpsAcc = 0, fpsN = 0, fpsTimer = 0;
+function adaptResolution(dt) {
+  fpsAcc += dt; fpsN++; fpsTimer += dt;
+  if (fpsTimer < 2) return; // evaluate every 2s
+  const fps = fpsN / fpsAcc;
+  fpsAcc = 0; fpsN = 0; fpsTimer = 0;
+  let next = prCurrent;
+  if (fps < 45) next = Math.max(PR_MIN, prCurrent - 0.25);
+  else if (fps > 58 && prCurrent < PR_MAX) next = Math.min(PR_MAX, prCurrent + 0.125);
+  if (Math.abs(next - prCurrent) > 0.01) {
+    prCurrent = next;
+    renderer.setPixelRatio(prCurrent);
+    renderer.setSize(innerWidth, innerHeight);
+  }
+}
 
 // debug hooks
 window.__dbg = () => ({

@@ -183,8 +183,16 @@ class Avatar {
     this._play('Idle', 0.05);
   }
 
-  update(dt, now) {
-    if (this.mixer) this.mixer.update(dt);
+  update(dt, now, camPos) {
+    // animation LOD: distant avatars update their mixers less often (the
+    // accumulated dt keeps playback speed correct) — big CPU win with many players
+    if (this.mixer) {
+      this._animDt = (this._animDt || 0) + dt;
+      this._animTick = (this._animTick || 0) + 1;
+      const d2 = camPos ? this.group.position.distanceToSquared(camPos) : 0;
+      const every = d2 > 2500 ? 4 : d2 > 900 ? 2 : 1; // >50m: 1/4 rate, >30m: 1/2
+      if (this._animTick % every === 0) { this.mixer.update(this._animDt); this._animDt = 0; }
+    }
     if (!this.alive) return;
 
     const renderT = now - INTERP_DELAY_MS;
@@ -252,7 +260,7 @@ export class RemotePlayers {
     }
     return out;
   }
-  update(dt, now) {
-    for (const a of this.map.values()) a.update(dt, now);
+  update(dt, now, camPos) {
+    for (const a of this.map.values()) a.update(dt, now, camPos);
   }
 }
